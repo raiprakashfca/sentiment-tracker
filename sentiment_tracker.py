@@ -10,8 +10,10 @@ import os
 NIFTY_INDEX_TOKEN = 256265
 DELTA_LOWER = 0.05
 DELTA_UPPER = 0.60
+OPEN_LOG_PATH = "greeks_open.csv"
+LIVE_LOG_PATH = "greeks_log.csv"
 
-# -------------------- LOAD GOOGLE SHEET --------------------
+# -------------------- SETUP GOOGLE SHEET --------------------
 gcreds = json.loads(os.environ["GCREDS"])
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
@@ -19,22 +21,21 @@ client = gspread.authorize(creds)
 sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
 
 api_key = sheet.acell("A1").value.strip()
-api_secret = sheet.acell("B1").value.strip()
 access_token = sheet.acell("C1").value.strip()
 
-# -------------------- INIT KITE --------------------
+# -------------------- INIT ZERODHA --------------------
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
 
-# ✅ Validate token
+# Validate token
 try:
     profile = kite.profile()
     print(f"🟢 Access token valid for: {profile['user_name']}")
-except Exception as e:
+except Exception:
     print("🔴 Invalid access token. Please login again.")
     exit(1)
 
-# -------------------- FETCH OPTION CHAIN --------------------
+# -------------------- FETCH NIFTY OPTION CHAIN --------------------
 print("📥 Fetching instruments...")
 instruments = kite.instruments("NFO")
 nifty_options = [
@@ -46,61 +47,101 @@ nifty_options = [
 
 expiries = sorted(set(i["expiry"] for i in nifty_options))
 nearest_expiry = expiries[0]
-print(f"📅 Nearest Expiry: {nearest_expiry}")
-
 nifty_options = [i for i in nifty_options if i["expiry"] == nearest_expiry]
 
 spot = kite.ltp(["NSE:NIFTY 50"])["NSE:NIFTY 50"]["last_price"]
 print(f"📈 NIFTY Spot: {spot}")
 
 tokens = [i["instrument_token"] for i in nifty_options]
-quote = kite.quote(tokens)
+quotes = kite.quote(tokens)
 
-# -------------------- EXTRACT GREEKS --------------------
-greek_rows = []
+# -------------------- EXTRACT GREEKS (CE/PE SPLIT) --------------------
+ce_rows, pe_rows = [], []
 
 for inst in nifty_options:
-    token = inst["instrument_token"]
-    info = quote.get(token, {}).get("greeks", None)
+    info = quotes.get(inst["instrument_token"], {}).get("greeks", None)
     if not info:
         continue
 
     delta = abs(info.get("delta", 0))
     if DELTA_LOWER <= delta <= DELTA_UPPER:
-        greek_rows.append({
+        entry = {
             "strike": inst["strike"],
-            "type": inst["instrument_type"],
             "delta": info.get("delta", 0),
             "vega": info.get("vega", 0),
             "theta": info.get("theta", 0)
-        })
+        }
+        if inst["instrument_type"] == "CE":
+            ce_rows.append(entry)
+        else:
+            pe_rows.append(entry)
 
-df = pd.DataFrame(greek_rows)
-if df.empty:
-    print("⚠️ No strikes found in delta range.")
+df_ce = pd.DataFrame(ce_rows)
+df_pe = pd.DataFrame(pe_rows)
+
+if df_ce.empty and df_pe.empty:
+    print("⚠️ No strikes in delta range.")
     exit(0)
 
-delta_sum = df["delta"].sum()
-vega_sum = df["vega"].sum()
-theta_sum = df["theta"].sum()
+# -------------------- SUMMARIZE GREEKS --------------------
+now = datetime.datetime.now()
+today = now.strftime("%Y-%m-%d")
+timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
 
-log_entry = pd.DataFrame([{
-    "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    "delta_sum": delta_sum,
-    "vega_sum": vega_sum,
-    "theta_sum": theta_sum
-}])
+def greek_summary(df):
+    return {
+        "delta_sum": df["delta"].sum(),
+        "vega_sum": df["vega"].sum(),
+        "theta_sum": df["theta"].sum()
+    } if not df.empty else {"delta_sum": 0, "vega_sum": 0, "theta_sum": 0}
 
-log_path = "greeks_log.csv"
-if os.path.exists(log_path):
-    log_entry.to_csv(log_path, mode="a", header=False, index=False)
+ce = greek_summary(df_ce)
+pe = greek_summary(df_pe)
+
+# -------------------- MARKET OPEN LOGIC --------------------
+if now.hour == 9 and now.minute < 20:  # market open window
+    open_data = pd.DataFrame([{
+        "date": today,
+        "ce_delta": ce["delta_sum"],
+        "ce_vega": ce["vega_sum"],
+        "ce_theta": ce["theta_sum"],
+        "pe_delta": pe["delta_sum"],
+        "pe_vega": pe["vega_sum"],
+        "pe_theta": pe["theta_sum"]
+    }])
+    open_data.to_csv(OPEN_LOG_PATH, index=False)
+    print("📌 Market open snapshot saved.")
 else:
-    log_entry.to_csv(log_path, index=False)
+    if not os.path.exists(OPEN_LOG_PATH):
+        print("❗ No market open snapshot found.")
+        exit(1)
+    open_df = pd.read_csv(OPEN_LOG_PATH)
+    open_row = open_df.iloc[0]
 
-print("✅ Greek Summary:")
-print(log_entry)
+    log_row = pd.DataFrame([{
+        "timestamp": timestamp,
+        "ce_delta": ce["delta_sum"],
+        "ce_delta_change": ce["delta_sum"] - open_row["ce_delta"],
+        "ce_vega": ce["vega_sum"],
+        "ce_vega_change": ce["vega_sum"] - open_row["ce_vega"],
+        "ce_theta": ce["theta_sum"],
+        "ce_theta_change": ce["theta_sum"] - open_row["ce_theta"],
+        "pe_delta": pe["delta_sum"],
+        "pe_delta_change": pe["delta_sum"] - open_row["pe_delta"],
+        "pe_vega": pe["vega_sum"],
+        "pe_vega_change": pe["vega_sum"] - open_row["pe_vega"],
+        "pe_theta": pe["theta_sum"],
+        "pe_theta_change": pe["theta_sum"] - open_row["pe_theta"]
+    }])
 
-# -------------------- FORCE UPDATE ACCESS TOKEN --------------------
-# Always write token to Google Sheet
+    if os.path.exists(LIVE_LOG_PATH):
+        log_row.to_csv(LIVE_LOG_PATH, mode="a", header=False, index=False)
+    else:
+        log_row.to_csv(LIVE_LOG_PATH, index=False)
+
+    print("📊 Delta from market open:")
+    print(log_row)
+
+# -------------------- UPDATE TOKEN BACK TO SHEET --------------------
 sheet.update("C1", access_token)
-print("🔄 Access token written to sheet (forced update).")
+print("🔄 Access token written to sheet.")
