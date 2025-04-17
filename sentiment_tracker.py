@@ -7,7 +7,6 @@ import json
 import os
 
 # -------------------- CONFIG --------------------
-# Fixed instrument token for NIFTY
 NIFTY_INDEX_TOKEN = 256265
 DELTA_LOWER = 0.05
 DELTA_UPPER = 0.60
@@ -27,7 +26,7 @@ access_token = sheet.acell("C1").value.strip()
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
 
-# ✅ Fetch profile to confirm token works
+# ✅ Validate token
 try:
     profile = kite.profile()
     print(f"🟢 Access token valid for: {profile['user_name']}")
@@ -45,23 +44,19 @@ nifty_options = [
     and i["segment"] == "NFO-OPT"
 ]
 
-# ✅ Get nearest expiry
 expiries = sorted(set(i["expiry"] for i in nifty_options))
 nearest_expiry = expiries[0]
 print(f"📅 Nearest Expiry: {nearest_expiry}")
 
-# Filter by expiry
 nifty_options = [i for i in nifty_options if i["expiry"] == nearest_expiry]
 
-# Get LTP for NIFTY
-spot = kite.ltp([f"NSE:NIFTY 50"])["NSE:NIFTY 50"]["last_price"]
+spot = kite.ltp(["NSE:NIFTY 50"])["NSE:NIFTY 50"]["last_price"]
 print(f"📈 NIFTY Spot: {spot}")
 
-# -------------------- FETCH MARKET QUOTES --------------------
 tokens = [i["instrument_token"] for i in nifty_options]
 quote = kite.quote(tokens)
 
-# -------------------- EXTRACT GREEKS + FILTER --------------------
+# -------------------- EXTRACT GREEKS --------------------
 greek_rows = []
 
 for inst in nifty_options:
@@ -85,7 +80,6 @@ if df.empty:
     print("⚠️ No strikes found in delta range.")
     exit(0)
 
-# -------------------- SUMMARIZE --------------------
 delta_sum = df["delta"].sum()
 vega_sum = df["vega"].sum()
 theta_sum = df["theta"].sum()
@@ -97,20 +91,16 @@ log_entry = pd.DataFrame([{
     "theta_sum": theta_sum
 }])
 
-# Save log
 log_path = "greeks_log.csv"
 if os.path.exists(log_path):
     log_entry.to_csv(log_path, mode="a", header=False, index=False)
 else:
     log_entry.to_csv(log_path, index=False)
 
-# -------------------- PRINT SUMMARY --------------------
 print("✅ Greek Summary:")
 print(log_entry)
 
-# -------------------- WRITE BACK ACCESS TOKEN --------------------
-# Validate live token and store back in sheet if changed
-current_session = kite._access_token
-if current_session != access_token:
-    sheet.update("C1", current_session)
-    print("🔄 Access token refreshed in sheet.")
+# -------------------- FORCE UPDATE ACCESS TOKEN --------------------
+# Always write token to Google Sheet
+sheet.update("C1", access_token)
+print("🔄 Access token written to sheet (forced update).")
