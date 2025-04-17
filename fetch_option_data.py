@@ -7,7 +7,7 @@ import os
 import toml
 import random
 
-# Load Google credentials from secrets
+# Load secrets from ~/.streamlit/secrets.toml (populated via GitHub Action)
 with open(os.path.expanduser("~/.streamlit/secrets.toml"), "r") as f:
     secrets = toml.load(f)
 
@@ -17,18 +17,25 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 client = gspread.authorize(creds)
 sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
 
-# ✅ Always read API key from A1 and access token from C1
+# ✅ Always use A1 and C1
 api_key = sheet.acell("A1").value.strip()
 access_token = sheet.acell("C1").value.strip()
 
-# Initialize Kite
+# 🔍 Visual Token Validator
+print("🔐 Token Validator:")
+print(f"📎 API Key         : {api_key}")
+print(f"🔑 Access Token    : {access_token[:6]}...{access_token[-6:]}")
+print(f"🕒 Timestamp       : {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+print("-" * 40)
+
+# Init Kite
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
 
-# Test API call
+# Test connection
 nifty_spot = kite.ltp(["NSE:NIFTY 50"])["NSE:NIFTY 50"]["last_price"]
 
-# Proceed with mock Greek analysis (can be replaced with actual Greeks)
+# Simulated Greeks (real logic later)
 dump = kite.instruments("NSE")
 option_instruments = [i for i in dump if i["segment"] == "NFO-OPT" and i["name"] == "NIFTY"]
 expiry_dates = sorted(set(i["expiry"] for i in option_instruments if i["expiry"] >= datetime.date.today()))
