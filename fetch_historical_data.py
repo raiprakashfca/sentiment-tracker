@@ -2,8 +2,8 @@ from kiteconnect import KiteConnect
 import datetime
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import toml
 import os
+import json
 import pandas as pd
 
 # -------------------- SETUP HOLIDAY LIST --------------------
@@ -12,7 +12,7 @@ nse_holidays_2025 = [
     datetime.date(2025, 1, 26),  # Republic Day
     datetime.date(2025, 2, 26),  # Mahashivratri
     datetime.date(2025, 3, 14),  # Holi
-    datetime.date(2025, 3, 31),  # Id-Ul-Fitr (Ramadan Eid)
+    datetime.date(2025, 3, 31),  # Id-Ul-Fitr
     datetime.date(2025, 4, 10),  # Mahavir Jayanti
     datetime.date(2025, 4, 14),  # Ambedkar Jayanti
     datetime.date(2025, 4, 18),  # Good Friday
@@ -35,10 +35,9 @@ def get_last_trading_day(today, holidays):
 
 # -------------------- LOAD GOOGLE SHEET CREDENTIALS --------------------
 
-with open(os.path.expanduser("~/.streamlit/secrets.toml"), "r") as f:
-    secrets = toml.load(f)
+# Load from GitHub Actions secret
+gcreds = json.loads(os.environ["GCREDS"])
 
-gcreds = secrets["gcp_service_account"]
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 client = gspread.authorize(creds)
@@ -47,7 +46,7 @@ sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
 api_key = sheet.acell("A1").value.strip()
 access_token = sheet.acell("C1").value.strip()
 
-# -------------------- VALIDATE TOKEN --------------------
+# -------------------- TOKEN VALIDATOR --------------------
 
 print("🔐 Token Validator:")
 print(f"📎 API Key         : {api_key}")
@@ -93,7 +92,7 @@ try:
         continuous=False
     )
     df = pd.DataFrame(ohlc)
-    print(f"✅ Retrieved {len(df)} candles")
+    print(f"✅ Retrieved {len(df)} candles for {last_trading_day}")
     print(df.head())
 except Exception as e:
     print(f"❌ Failed to fetch historical data: {e}")
