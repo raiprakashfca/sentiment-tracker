@@ -3,7 +3,7 @@ name: 📈 Run Sentiment Tracker Every 5 Minutes
 on:
   schedule:
     - cron: '*/5 * * * *'  # Runs every 5 minutes
-  workflow_dispatch:        # Also allows manual trigger
+  workflow_dispatch:        # Allows manual trigger too
 
 jobs:
   sentiment:
@@ -29,3 +29,11 @@ jobs:
         env:
           GCREDS: ${{ secrets.GCREDS }}
         run: python sentiment_tracker.py
+
+      - name: 📤 Commit & Push greeks_log.csv
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add greeks_log.csv
+          git commit -m "📈 Update Greeks log $(date '+%Y-%m-%d %H:%M:%S')" || echo "No changes to commit"
+          git push
