@@ -1,0 +1,5 @@
+streamlit
+kiteconnect
+pandas
+gspread
+oauth2client

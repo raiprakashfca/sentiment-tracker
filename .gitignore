@@ -1,0 +1,6 @@
+gcreds.json
+*.csv
+__pycache__/
+*.pyc
+.env
+.DS_Store
