@@ -14,6 +14,11 @@ with st.sidebar:
     st.header("🔐 Zerodha Login")
     api_key = st.text_input("API Key", value="", type="default")
     api_secret = st.text_input("API Secret", value="", type="password")
+
+    if api_key:
+        login_url = f"https://kite.zerodha.com/connect/login?api_key={api_key}"
+        st.markdown(f"[🔗 Click here to login to Zerodha]({login_url})", unsafe_allow_html=True)
+
     request_token = st.text_input("Paste Request Token", value="", type="default")
 
     if st.button("🎟 Generate Access Token"):
