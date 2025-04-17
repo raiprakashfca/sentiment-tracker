@@ -17,28 +17,23 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
 
-# Load API credentials and access token
+# Read credentials from Sheet
 api_key = sheet.acell("A1").value.strip()
 api_secret = sheet.acell("B1").value.strip()
 access_token = sheet.acell("C1").value.strip()
 
 # ✅ Token Status Card
 st.subheader("🔑 Access Token Status")
-
 if access_token:
-    now = datetime.datetime.now()
-    try:
-        timestamp = sheet.acell("D1").value  # Optional timestamp (if added during save)
-        st.success(f"✅ Token found in C1.\n\n🕒 Last updated: `{timestamp}`" if timestamp else "✅ Token is available in C1.")
-    except:
-        st.success("✅ Token is available in C1.")
+    timestamp = sheet.acell("D1").value if sheet.acell("D1").value else "Unknown"
+    st.success(f"✅ Token found in C1.\n🕒 Last updated: `{timestamp}`")
 else:
-    st.error("❌ No access token found in C1. Please generate a fresh token from sidebar.")
+    st.error("❌ No access token found in C1. Please generate a new token using sidebar.")
 
-# Sidebar – Zerodha Token Generator
+# Sidebar: Token generation
 with st.sidebar:
     st.header("🔐 Zerodha Token Manager")
-    st.markdown(f"✅ Using API Key from Sheet: `{api_key}`")
+    st.markdown(f"🧾 Using API Key from Sheet: `{api_key}`")
 
     try:
         kite = KiteConnect(api_key=api_key)
@@ -51,21 +46,26 @@ with st.sidebar:
 
     if st.button("Generate Access Token"):
         try:
+            # ⚠️ RECREATE kite object before generating session to ensure correct API key
+            kite = KiteConnect(api_key=api_key)
             session_data = kite.generate_session(request_token, api_secret=api_secret)
             access_token = session_data["access_token"]
-            sheet.update_acell("C1", access_token)
-            sheet.update_acell("D1", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))  # Save timestamp
 
-            # Confirm write
+            # Save token and timestamp
+            sheet.update_acell("C1", access_token)
+            sheet.update_acell("D1", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+            # Confirm match
             confirmed_token = sheet.acell("C1").value.strip()
             if confirmed_token == access_token:
-                st.success("✅ Access token saved to Google Sheet (C1)!")
+                st.success("✅ Access token saved and confirmed in Google Sheet (C1).")
             else:
-                st.error("⚠️ Token save failed or mismatch in C1. Please try again.")
+                st.error("⚠️ Mismatch while saving access token. Try again.")
+
         except Exception as e:
             st.error(f"❌ Token generation failed: {e}")
 
-# Main content – Greek chart
+# Main content: Log chart
 if os.path.exists("greeks_log.csv"):
     df = pd.read_csv("greeks_log.csv")
     df["time"] = pd.to_datetime(df["time"])
