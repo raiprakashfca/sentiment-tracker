@@ -5,7 +5,7 @@ on:
 
 jobs:
   run-backfill:
-    runs-on: ubuntu-22.04  # ✅ Safe, supported version
+    runs-on: ubuntu-22.04
 
     steps:
       - name: ⬇️ Checkout repo
@@ -14,7 +14,7 @@ jobs:
       - name: 🐍 Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'  # ✅ Enclosed in quotes to avoid float parsing
+          python-version: '3.10'
 
       - name: 🧪 Show Python Version
         run: python --version
@@ -24,4 +24,6 @@ jobs:
           pip install pandas gspread oauth2client kiteconnect toml
 
       - name: 🔁 Run Historical Data Fetcher
+        env:
+          GCREDS: ${{ secrets.GCREDS }}
         run: python fetch_historical_data.py
