@@ -68,18 +68,10 @@ print(f"📆 Last Trading Day: {last_trading_day}")
 from_time = datetime.datetime.combine(last_trading_day, datetime.time(9, 15))
 to_time = datetime.datetime.combine(last_trading_day, datetime.time(15, 30))
 
-# -------------------- GET INSTRUMENT TOKEN FOR NIFTY 50 --------------------
+# -------------------- USE FIXED INSTRUMENT TOKEN FOR NIFTY 50 --------------------
 
-try:
-    instruments = kite.instruments("NSE")
-    nifty_index = [i for i in instruments if i["tradingsymbol"] == "NIFTY 50" and i["segment"] == "NSE"]
-    if not nifty_index:
-        raise Exception("NIFTY 50 not found in instruments list.")
-    instrument_token = nifty_index[0]["instrument_token"]
-    print(f"🎯 Instrument Token: {instrument_token}")
-except Exception as e:
-    print(f"❌ Error fetching instrument token: {e}")
-    exit(1)
+instrument_token = 256265  # NIFTY 50 index token
+print(f"🎯 Using Instrument Token for NIFTY 50: {instrument_token}")
 
 # -------------------- FETCH HISTORICAL OHLC DATA --------------------
 
