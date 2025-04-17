@@ -12,18 +12,23 @@ DELTA_LOWER = 0.05
 DELTA_UPPER = 0.60
 OPEN_LOG_PATH = "greeks_open.csv"
 LIVE_LOG_PATH = "greeks_log.csv"
+SHEET_NAME = "GreekSentimentLog"
 
-# -------------------- SETUP GOOGLE SHEET --------------------
+# -------------------- GOOGLE SHEET SETUP --------------------
 gcreds = json.loads(os.environ["GCREDS"])
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 client = gspread.authorize(creds)
-sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
+sheet = client.open(SHEET_NAME)
 
-api_key = sheet.acell("A1").value.strip()
-access_token = sheet.acell("C1").value.strip()
+ws_open = sheet.worksheet("OpenSnapshot")
+ws_live = sheet.worksheet("LiveLog")
 
-# -------------------- INIT ZERODHA --------------------
+# -------------------- ZERODHA API SETUP --------------------
+token_sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
+api_key = token_sheet.acell("A1").value.strip()
+access_token = token_sheet.acell("C1").value.strip()
+
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
 
@@ -35,7 +40,7 @@ except Exception:
     print("🔴 Invalid access token. Please login again.")
     exit(1)
 
-# -------------------- FETCH NIFTY OPTION CHAIN --------------------
+# -------------------- FETCH INSTRUMENTS --------------------
 print("📥 Fetching instruments...")
 instruments = kite.instruments("NFO")
 nifty_options = [
@@ -46,6 +51,10 @@ nifty_options = [
 ]
 
 expiries = sorted(set(i["expiry"] for i in nifty_options))
+if not expiries:
+    print("❌ No expiry found.")
+    exit(1)
+
 nearest_expiry = expiries[0]
 nifty_options = [i for i in nifty_options if i["expiry"] == nearest_expiry]
 
@@ -98,8 +107,8 @@ def greek_summary(df):
 ce = greek_summary(df_ce)
 pe = greek_summary(df_pe)
 
-# -------------------- MARKET OPEN LOGIC --------------------
-if now.hour == 9 and now.minute < 20:  # market open window
+# -------------------- MARKET OPEN SNAPSHOT --------------------
+if now.hour == 9 and now.minute < 20:
     open_data = pd.DataFrame([{
         "date": today,
         "ce_delta": ce["delta_sum"],
@@ -110,11 +119,18 @@ if now.hour == 9 and now.minute < 20:  # market open window
         "pe_theta": pe["theta_sum"]
     }])
     open_data.to_csv(OPEN_LOG_PATH, index=False)
+
+    # Update Google Sheet
+    ws_open.clear()
+    ws_open.append_row(open_data.columns.tolist())
+    ws_open.append_row(open_data.values.tolist()[0])
+
     print("📌 Market open snapshot saved.")
 else:
     if not os.path.exists(OPEN_LOG_PATH):
         print("❗ No market open snapshot found.")
         exit(1)
+
     open_df = pd.read_csv(OPEN_LOG_PATH)
     open_row = open_df.iloc[0]
 
@@ -134,14 +150,21 @@ else:
         "pe_theta_change": pe["theta_sum"] - open_row["pe_theta"]
     }])
 
+    # Save to local log
     if os.path.exists(LIVE_LOG_PATH):
         log_row.to_csv(LIVE_LOG_PATH, mode="a", header=False, index=False)
     else:
         log_row.to_csv(LIVE_LOG_PATH, index=False)
 
-    print("📊 Delta from market open:")
+    # Append to Google Sheet
+    if ws_live.row_count == 0:
+        ws_live.append_row(log_row.columns.tolist())
+
+    ws_live.append_row(log_row.values.tolist()[0])
+
+    print("📊 Greek log updated.")
     print(log_row)
 
-# -------------------- UPDATE TOKEN BACK TO SHEET --------------------
-sheet.update("C1", access_token)
-print("🔄 Access token written to sheet.")
+# -------------------- Update token back to sheet --------------------
+token_sheet.update("C1", [[access_token]])
+print("🔄 Access token written to Google Sheet.")
