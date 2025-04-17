@@ -1,0 +1,38 @@
+# .github/workflows/fetch-greeks.yml
+name: Auto Fetch Greeks
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # runs every 5 minutes
+  workflow_dispatch:
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.10
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run fetch_option_data.py
+        env:
+          STREAMLIT_SECRETS: ${{ secrets.STREAMLIT_SECRETS }}
+        run: |
+          echo "$STREAMLIT_SECRETS" > ~/.streamlit/secrets.toml
+          python fetch_option_data.py
+
+      - name: Commit updated log
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add greeks_log.csv
+          git commit -m "📊 Auto-update Greeks log" || echo "No changes to commit"
+          git push
