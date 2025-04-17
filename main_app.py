@@ -1,77 +1,52 @@
 import streamlit as st
 import pandas as pd
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from kiteconnect import KiteConnect
-import datetime
 import os
 
-# Streamlit setup
-st.set_page_config(layout="wide")
-st.title("📈 NIFTY Sentiment Tracker (Delta 0.05–0.60)")
+st.set_page_config(page_title="📈 Market Sentiment Tracker", layout="wide")
 
-# Load Google credentials from Streamlit secrets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_dict = {key: st.secrets["gcp_service_account"][key] for key in st.secrets["gcp_service_account"]}
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
-sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
+st.title("📊 NIFTY Option Greeks Sentiment Dashboard")
 
-# Load credentials from sheet
-api_key = sheet.acell("A1").value.strip()
-api_secret = sheet.acell("B1").value.strip()
-access_token = sheet.acell("C1").value.strip()
-last_updated = sheet.acell("D1").value if sheet.acell("D1").value else "Unknown"
+# -------------------- Load Files --------------------
+if not os.path.exists("greeks_open.csv") or not os.path.exists("greeks_log.csv"):
+    st.warning("⚠️ Greek log files not found yet. Please wait until 9:15 AM for open snapshot.")
+    st.stop()
 
-# ✅ Show token status at top
-st.subheader("🔑 Access Token Status")
-if access_token:
-    st.success(f"✅ Token is present in C1\n🕒 Last Updated: `{last_updated}`")
-else:
-    st.error("❌ No access token found in C1. Please generate a fresh token from the sidebar.")
+open_df = pd.read_csv("greeks_open.csv")
+log_df = pd.read_csv("greeks_log.csv")
 
-# 🔧 Sidebar: Token manager
-with st.sidebar:
-    st.header("🔐 Zerodha Token Manager")
-    st.markdown(f"🧾 Using API Key from Sheet: `{api_key}`")
+# -------------------- Show Market Open Snapshot --------------------
+st.subheader("📌 Market Open Baseline (9:15 AM)")
+st.dataframe(open_df.style.format(precision=2))
 
-    try:
-        kite = KiteConnect(api_key=api_key)
-        login_url = kite.login_url()
-        st.markdown(f"🔗 [Login to Zerodha]({login_url})")
-    except Exception as e:
-        st.error(f"❌ Failed to generate login URL: {e}")
+# -------------------- Latest Delta Summary --------------------
+st.subheader("📈 Latest Greek Change from Market Open")
 
-    request_token = st.text_input("📋 Paste your request_token here:")
+latest = log_df.iloc[-1]
 
-    if st.button("Generate Access Token"):
-        try:
-            # Re-initialize Kite with same key
-            kite = KiteConnect(api_key=api_key)
-            session_data = kite.generate_session(request_token, api_secret=api_secret)
-            access_token = session_data["access_token"]
+st.metric("CE Δ Delta", f"{latest['ce_delta_change']:.2f}", delta_color="inverse")
+st.metric("PE Δ Delta", f"{latest['pe_delta_change']:.2f}")
 
-            # Save access token and timestamp
-            sheet.update_acell("C1", access_token)
-            sheet.update_acell("D1", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+col1, col2 = st.columns(2)
+with col1:
+    st.metric("CE Δ Vega", f"{latest['ce_vega_change']:.2f}")
+    st.metric("CE Δ Theta", f"{latest['ce_theta_change']:.2f}")
+with col2:
+    st.metric("PE Δ Vega", f"{latest['pe_vega_change']:.2f}")
+    st.metric("PE Δ Theta", f"{latest['pe_theta_change']:.2f}")
 
-            # 🔍 Confirm by re-reading the token
-            confirmed_token = sheet.acell("C1").value.strip()
-            if confirmed_token == access_token:
-                st.success("✅ Access token saved and confirmed in Google Sheet (C1).")
-            else:
-                st.error(
-                    f"⚠️ Token mismatch!\n\nExpected: `{access_token[:6]}...{access_token[-6:]}`\nFound: `{confirmed_token[:6]}...{confirmed_token[-6:]}`"
-                )
+# -------------------- Trendline Charts --------------------
+st.subheader("📊 Real-Time Greek Trends")
 
-        except Exception as e:
-            st.error(f"❌ Token generation or sheet write failed: {e}")
+log_df["timestamp"] = pd.to_datetime(log_df["timestamp"])
 
-# 📊 Main panel: Show latest Greeks log if available
-if os.path.exists("greeks_log.csv"):
-    df = pd.read_csv("greeks_log.csv")
-    df["time"] = pd.to_datetime(df["time"])
-    st.line_chart(df.set_index("time")[["delta_sum", "vega_sum", "theta_sum"]])
-    st.dataframe(df.tail(10).sort_values(by="time", ascending=False), use_container_width=True)
-else:
-    st.info("🕒 No Greek log file found yet. Run `fetch_option_data.py` to begin logging.")
+tab1, tab2 = st.tabs(["🔵 CE Greeks", "🔴 PE Greeks"])
+
+with tab1:
+    st.line_chart(log_df.set_index("timestamp")[["ce_delta_change", "ce_vega_change", "ce_theta_change"]])
+
+with tab2:
+    st.line_chart(log_df.set_index("timestamp")[["pe_delta_change", "pe_vega_change", "pe_theta_change"]])
+
+# -------------------- Raw Logs (Optional) --------------------
+with st.expander("🧾 View Raw Greek Logs"):
+    st.dataframe(log_df.tail(20).style.format(precision=2))
