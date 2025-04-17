@@ -30,12 +30,17 @@ with st.sidebar:
                 client = gspread.authorize(creds)
                 sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
 
-                sheet.update("A1", api_key)
-                sheet.update("B1", api_secret)
-                sheet.update("C1", access_token)
+                try:
+                    sheet.update("A1", api_key)
+                    st.info("✅ API Key saved to A1")
+                    sheet.update("B1", api_secret)
+                    st.info("✅ API Secret saved to B1")
+                    sheet.update("C1", access_token)
+                    st.success("✅ Access token saved to C1")
+                    st.code(access_token)
+                except Exception as e:
+                    st.error(f"❌ Failed to update Google Sheet: {e}")
 
-                st.success("✅ Access token updated in Google Sheet.")
-                st.code(access_token)
             except Exception as e:
                 st.error(f"❌ Error generating session: {e}")
         else:
