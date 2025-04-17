@@ -1,0 +1,31 @@
+name: 📈 Run Sentiment Tracker Every 5 Minutes
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Runs every 5 minutes
+  workflow_dispatch:        # Also allows manual trigger
+
+jobs:
+  sentiment:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: ⬇️ Checkout repo
+        uses: actions/checkout@v3
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 🧪 Show Python Version
+        run: python --version
+
+      - name: 📦 Install dependencies
+        run: |
+          pip install pandas gspread oauth2client kiteconnect toml
+
+      - name: 🔁 Run Sentiment Tracker
+        env:
+          GCREDS: ${{ secrets.GCREDS }}
+        run: python sentiment_tracker.py
