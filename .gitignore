@@ -1,5 +1,8 @@
+# Ignore credentials and logs
 gcreds.json
 *.csv
+
+# Ignore compiled files and system clutter
 __pycache__/
 *.pyc
 .env
