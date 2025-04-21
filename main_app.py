@@ -10,15 +10,23 @@ st.set_page_config(page_title="📈 Market Sentiment Tracker", layout="wide")
 st.title("📊 NIFTY Option Greeks Sentiment Dashboard")
 
 # -------------------- Google Sheet Setup --------------------
-gcreds = json.loads(os.environ["GCREDS"])
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
-client = gspread.authorize(creds)
-token_sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
+try:
+    gcreds = json.loads(os.environ["GCREDS"])
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
+    client = gspread.authorize(creds)
+    token_sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
+except Exception as e:
+    st.error(f"❌ Failed to connect to Google Sheets: {e}")
+    st.stop()
 
 # -------------------- Fetch API Key & Secret --------------------
-api_key = token_sheet.acell("A1").value.strip()
-api_secret = token_sheet.acell("B1").value.strip()
+try:
+    api_key = token_sheet.acell("A1").value.strip()
+    api_secret = token_sheet.acell("B1").value.strip()
+except Exception as e:
+    st.error(f"❌ Failed to read API Key/Secret: {e}")
+    st.stop()
 
 # -------------------- Zerodha Login Section --------------------
 with st.sidebar:
