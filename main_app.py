@@ -9,40 +9,36 @@ from kiteconnect import KiteConnect
 st.set_page_config(page_title="📈 Market Sentiment Tracker", layout="wide")
 st.title("📊 NIFTY Option Greeks Sentiment Dashboard")
 
+# -------------------- Google Sheet Setup --------------------
+gcreds = json.loads(os.environ["GCREDS"])
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
+client = gspread.authorize(creds)
+token_sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
+
+# -------------------- Fetch API Key & Secret --------------------
+api_key = token_sheet.acell("A1").value.strip()
+api_secret = token_sheet.acell("B1").value.strip()
+
 # -------------------- Zerodha Login Section --------------------
 with st.sidebar:
     st.header("🔐 Zerodha Login")
-    api_key = st.text_input("API Key", value="", type="default")
-    api_secret = st.text_input("API Secret", value="", type="password")
+    st.info(f"📎 API Key (fetched): `{api_key}`")
 
-    if api_key:
-        login_url = f"https://kite.zerodha.com/connect/login?api_key={api_key}"
-        st.markdown(f"[🔗 Click here to login to Zerodha]({login_url})", unsafe_allow_html=True)
+    login_url = f"https://kite.zerodha.com/connect/login?api_key={api_key}"
+    st.markdown(f"[🔗 Click here to login to Zerodha]({login_url})", unsafe_allow_html=True)
 
     request_token = st.text_input("Paste Request Token", value="", type="default")
 
     if st.button("🎟 Generate Access Token"):
-        if api_key and api_secret and request_token:
+        if request_token:
             try:
                 kite = KiteConnect(api_key=api_key)
                 data = kite.generate_session(request_token, api_secret=api_secret)
                 access_token = data["access_token"]
 
-                # Save to Google Sheet
-                gcreds = json.loads(os.environ["GCREDS"])
-                scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-                creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
-                client = gspread.authorize(creds)
-                sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
-
                 try:
-                    sheet.update("A1", [[api_key]])
-                    st.info("✅ API Key saved to A1")
-
-                    sheet.update("B1", [[api_secret]])
-                    st.info("✅ API Secret saved to B1")
-
-                    sheet.update("C1", [[access_token]])
+                    token_sheet.update("C1", [[access_token]])
                     st.success("✅ Access token saved to C1")
                     st.code(access_token)
                 except Exception as e:
@@ -51,7 +47,7 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"❌ Error generating session: {e}")
         else:
-            st.warning("Please fill all fields.")
+            st.warning("Please paste the request token.")
 
 # -------------------- Load Log Files --------------------
 if not os.path.exists("greeks_open.csv") or not os.path.exists("greeks_log.csv"):
