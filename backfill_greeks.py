@@ -70,9 +70,9 @@ def calculate_greeks(option_type, spot, strike, iv, time_to_expiry, price):
         vega = spot * norm.pdf(d1) * math.sqrt(time_to_expiry) / 100
         theta = (-spot * norm.pdf(d1) * iv / (2 * math.sqrt(time_to_expiry))) / 365
         if option_type == "PE":
-            theta = theta - risk_free_rate * strike * math.exp(-risk_free_rate * time_to_expiry) * norm.cdf(-d2) / 365
+            theta -= risk_free_rate * strike * math.exp(-risk_free_rate * time_to_expiry) * norm.cdf(-d2) / 365
         else:
-            theta = theta - risk_free_rate * strike * math.exp(-risk_free_rate * time_to_expiry) * norm.cdf(d2) / 365
+            theta -= risk_free_rate * strike * math.exp(-risk_free_rate * time_to_expiry) * norm.cdf(d2) / 365
         return delta, vega, theta
     except Exception:
         return 0, 0, 0
@@ -93,9 +93,9 @@ for i, timestamp in enumerate(intervals):
     try:
         spot = spot_prices[i]
         time_to_expiry = (pd.to_datetime(nearest_expiry) - timestamp).total_seconds() / (365 * 24 * 60 * 60)
-        
+
         ce_delta_sum = pe_delta_sum = ce_vega_sum = pe_vega_sum = ce_theta_sum = pe_theta_sum = 0
-        
+
         for _, row in opt_chain.iterrows():
             try:
                 token = row["instrument_token"]
@@ -131,7 +131,6 @@ for i, timestamp in enumerate(intervals):
             pd.DataFrame([snapshot]).to_csv("greeks_open.csv", index=False)
             print("✅ Saved 9:15 snapshot to greeks_open.csv")
 
-        # Calculate changes
         log_records.append({
             "timestamp": timestamp,
             "ce_delta_change": snapshot["ce_delta"] - open_log["ce_delta"],
@@ -148,6 +147,6 @@ for i, timestamp in enumerate(intervals):
         print(f"⚠️ {timestamp.strftime('%H:%M')} – Skipped due to error: {e}")
         continue
 
-# Save final log
+# Save full log
 pd.DataFrame(log_records).to_csv("greeks_log_historical.csv", index=False)
 print("✅ Saved full log to greeks_log_historical.csv")
