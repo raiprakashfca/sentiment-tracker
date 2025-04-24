@@ -13,8 +13,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # ---------------------- CONFIG ----------------------
 symbol = "NIFTY"
-iv_input = float(input("Enter Implied Volatility (e.g., 0.15 for 15%): ").strip())
 risk_free_rate = 0.06
+iv_input = float(input("Enter Implied Volatility (e.g., 0.15 for 15%): ").strip())
 
 # ---------------------- GOOGLE SHEET AUTH ----------------------
 gcreds = json.loads(os.environ["GCREDS"])
@@ -51,18 +51,20 @@ if not os.path.exists(instr_file):
     with open(instr_file, "w") as f:
         f.write(response.text)
     print("✅ Instrument list cached.")
-    
+
 instruments = pd.read_csv(instr_file)
 opt_chain = instruments[(instruments["segment"] == "NFO-OPT") & (instruments["name"] == symbol)]
 
 # ---------------------- GET NEAREST EXPIRY ----------------------
 expiries = sorted(opt_chain["expiry"].unique())
+if not expiries:
+    raise Exception("❌ No expiry found for NIFTY")
 nearest_expiry = expiries[0]
 opt_chain = opt_chain[opt_chain["expiry"] == nearest_expiry]
 print(f"🎯 Nearest Expiry: {nearest_expiry}")
 
 # ---------------------- BLACK-SCHOLES GREEKS ----------------------
-def calculate_greeks(option_type, spot, strike, iv, time_to_expiry, price):
+def calculate_greeks(option_type, spot, strike, iv, time_to_expiry):
     try:
         d1 = (math.log(spot / strike) + (risk_free_rate + 0.5 * iv ** 2) * time_to_expiry) / (iv * math.sqrt(time_to_expiry))
         d2 = d1 - iv * math.sqrt(time_to_expiry)
@@ -82,9 +84,13 @@ from_time = datetime.datetime.combine(today, datetime.time(9, 15))
 to_time = datetime.datetime.combine(today, datetime.time(15, 30))
 intervals = pd.date_range(from_time, to_time, freq="5min")
 
-spot_token = 256265
-spot_df = kite.historical_data(spot_token, from_time, to_time, interval="5minute")
-spot_prices = pd.DataFrame(spot_df)["close"].values
+try:
+    spot_token = 256265
+    spot_df = kite.historical_data(spot_token, from_time, to_time, interval="5minute")
+    spot_prices = pd.DataFrame(spot_df)["close"].values
+except Exception as e:
+    print(f"❌ Failed to fetch spot historical data: {e}")
+    exit()
 
 open_log = None
 log_records = []
@@ -101,9 +107,10 @@ for i, timestamp in enumerate(intervals):
                 token = row["instrument_token"]
                 strike = row["strike"]
                 opt_type = row["instrument_type"]  # CE or PE
-                ltp_data = kite.ltp([f"{row['exchange']}:{row['tradingsymbol']}"])
-                ltp = ltp_data[f"{row['exchange']}:{row['tradingsymbol']}"]["last_price"]
-                delta, vega, theta = calculate_greeks(opt_type, spot, strike, iv_input, time_to_expiry, ltp)
+                tradingsymbol = row["tradingsymbol"]
+                ltp_data = kite.ltp([f"{row['exchange']}:{tradingsymbol}"])
+                ltp = ltp_data[f"{row['exchange']}:{tradingsymbol}"]["last_price"]
+                delta, vega, theta = calculate_greeks(opt_type, spot, strike, iv_input, time_to_expiry)
                 if 0.05 <= abs(delta) <= 0.60:
                     if opt_type == "CE":
                         ce_delta_sum += delta
@@ -113,7 +120,7 @@ for i, timestamp in enumerate(intervals):
                         pe_delta_sum += delta
                         pe_vega_sum += vega
                         pe_theta_sum += theta
-            except:
+            except Exception as e:
                 continue
 
         snapshot = {
@@ -147,6 +154,9 @@ for i, timestamp in enumerate(intervals):
         print(f"⚠️ {timestamp.strftime('%H:%M')} – Skipped due to error: {e}")
         continue
 
-# Save full log
-pd.DataFrame(log_records).to_csv("greeks_log_historical.csv", index=False)
-print("✅ Saved full log to greeks_log_historical.csv")
+# Save final logs
+if log_records:
+    pd.DataFrame(log_records).to_csv("greeks_log_historical.csv", index=False)
+    print("✅ Saved full log to greeks_log_historical.csv")
+else:
+    print("⚠️ No log records to save.")
