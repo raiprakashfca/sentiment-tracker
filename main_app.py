@@ -2,9 +2,13 @@ import streamlit as st
 import pandas as pd
 import datetime
 import time
+import pytz
 
 # ----------------- PAGE SETUP -----------------
 st.set_page_config(page_title="📈 Sentiment Tracker", layout="wide")
+
+# ----------------- TIMEZONE SETUP -----------------
+ist = pytz.timezone("Asia/Kolkata")
 
 # ----------------- HEADER -----------------
 clock_placeholder = st.empty()
@@ -12,6 +16,8 @@ clock_placeholder = st.empty()
 col1, col2 = st.columns([8, 2])
 with col1:
     st.title("📈 Option Greeks Sentiment Tracker")
+    today = datetime.datetime.now(ist)
+    st.markdown(f"**🗓️ {today.strftime('%A, %d %B %Y, %I:%M:%S %p IST')}**")
 
 # ----------------- EXPLANATION -----------------
 st.markdown("""
@@ -33,7 +39,7 @@ Tracking both **CE** and **PE** separately.
 # ----------------- LOAD DATA -----------------
 try:
     df = pd.read_csv("greeks_log_historical.csv")
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_convert("Asia/Kolkata")
 except Exception as e:
     st.error(f"❌ Error loading data: {e}")
     st.stop()
@@ -44,7 +50,7 @@ def color_positive(val):
     return f'color: {color}'
 
 # ----------------- DISPLAY TABLE -----------------
-st.subheader("📊 Live Greek Changes (vs 9:15 AM)")
+st.subheader("📊 Live Greek Changes (vs 9:15 AM IST)")
 st.dataframe(
     df.style.applymap(color_positive, subset=[
         "ce_delta_change", "pe_delta_change",
@@ -61,9 +67,12 @@ st.dataframe(
     })
 )
 
+# ----------------- LAST REFRESH TIME -----------------
+st.caption(f"✅ Last updated at: {datetime.datetime.now(ist).strftime('%d-%b-%Y %I:%M:%S %p IST')}")
+
 # ----------------- LIVE CLOCK AND AUTO REFRESH -----------------
 st.caption("Auto-refreshes every 1 minute 🔄")
 for _ in range(60):
-    clock_placeholder.metric(label="🕒 Market Time", value=datetime.datetime.now().strftime("%H:%M:%S"))
+    clock_placeholder.metric(label="🕒 Market Time (IST)", value=datetime.datetime.now(ist).strftime("%H:%M:%S"))
     time.sleep(1)
 st.experimental_rerun()
