@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import datetime
-import time
 import pytz
 
 # ----------------- PAGE SETUP -----------------
@@ -11,13 +10,13 @@ st.set_page_config(page_title="📈 Sentiment Tracker", layout="wide")
 ist = pytz.timezone("Asia/Kolkata")
 
 # ----------------- HEADER -----------------
-clock_placeholder = st.empty()
-
 col1, col2 = st.columns([8, 2])
 with col1:
     st.title("📈 Option Greeks Sentiment Tracker")
     today = datetime.datetime.now(ist)
     st.markdown(f"**🗓️ {today.strftime('%A, %d %B %Y, %I:%M:%S %p IST')}**")
+with col2:
+    st.metric(label="🕒 Market Time (IST)", value=datetime.datetime.now(ist).strftime("%H:%M:%S"))
 
 # ----------------- EXPLANATION -----------------
 st.markdown("""
@@ -70,9 +69,6 @@ st.dataframe(
 # ----------------- LAST REFRESH TIME -----------------
 st.caption(f"✅ Last updated at: {datetime.datetime.now(ist).strftime('%d-%b-%Y %I:%M:%S %p IST')}")
 
-# ----------------- LIVE CLOCK AND AUTO REFRESH -----------------
-st.caption("Auto-refreshes every 1 minute 🔄")
-for _ in range(60):
-    clock_placeholder.metric(label="🕒 Market Time (IST)", value=datetime.datetime.now(ist).strftime("%H:%M:%S"))
-    time.sleep(1)
-st.experimental_rerun()
+# ----------------- AUTO REFRESH -----------------
+st.caption("🔄 Auto-refreshes every 1 minute")
+st.experimental_autorefresh(interval=60000)  # 60000 ms = 60 seconds
