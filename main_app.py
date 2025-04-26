@@ -70,5 +70,8 @@ st.dataframe(
 st.caption(f"✅ Last updated at: {datetime.datetime.now(ist).strftime('%d-%b-%Y %I:%M:%S %p IST')}")
 
 # ----------------- AUTO REFRESH -----------------
+from streamlit_autorefresh import st_autorefresh
+
 st.caption("🔄 Auto-refreshes every 1 minute")
-st.experimental_autorefresh(interval=60000)  # 60000 ms = 60 seconds
+st_autorefresh(interval=60000)  # 60000 ms = 1 minute
+
