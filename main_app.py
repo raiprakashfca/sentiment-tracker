@@ -42,6 +42,14 @@ try:
 except Exception as e:
     st.error(f"❌ Error loading data: {e}")
     st.stop()
+# ----------------- MARKET STATUS -----------------
+now = datetime.datetime.now(ist)
+market_open_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
+market_close_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
+
+if not (market_open_time <= now <= market_close_time):
+    st.warning("🏁 **Market Closed for the Day**\n\n✅ Updates will resume next trading session.")
+    st.stop()
 
 # ----------------- COLOR CODING -----------------
 def color_positive(val):
