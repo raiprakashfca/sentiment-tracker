@@ -1,75 +1,132 @@
-from kiteconnect import KiteConnect
-import datetime
 import pandas as pd
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+import datetime
+import time
+import pytz
 import os
-import toml
-import random
+import json
+import gspread
+from kiteconnect import KiteConnect
+from oauth2client.service_account import ServiceAccountCredentials
 
-# Load secrets from ~/.streamlit/secrets.toml (populated via GitHub Action)
-with open(os.path.expanduser("~/.streamlit/secrets.toml"), "r") as f:
-    secrets = toml.load(f)
+# ----------------- SETUP -----------------
 
-gcreds = secrets["gcp_service_account"]
+# Timezone
+ist = pytz.timezone("Asia/Kolkata")
+
+# Load credentials from Streamlit/Environment
+gcreds = json.loads(os.environ["GCREDS"])
+
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 client = gspread.authorize(creds)
 sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
 
-# ✅ Always use A1 and C1
 api_key = sheet.acell("A1").value.strip()
 access_token = sheet.acell("C1").value.strip()
 
-# 🔍 Visual Token Validator
-print("🔐 Token Validator:")
-print(f"📎 API Key         : {api_key}")
-print(f"🔑 Access Token    : {access_token[:6]}...{access_token[-6:]}")
-print(f"🕒 Timestamp       : {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-print("-" * 40)
-
-# Init Kite
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
 
-# Test connection
+# ----------------- CHECK MARKET TIME -----------------
+
+now = datetime.datetime.now(ist)
+market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+
+if not (market_open <= now <= market_close):
+    print(f"⏳ Outside market hours ({now.strftime('%H:%M:%S')}). Skipping fetch.")
+    exit()
+
+# ----------------- FETCH NIFTY OPTIONS -----------------
+
+# Fetch instruments
+instruments = pd.DataFrame(kite.instruments("NFO"))
+nifty_options = instruments[
+    (instruments["name"] == "NIFTY") &
+    (instruments["segment"] == "NFO-OPT")
+]
+
+# Get Spot Price
 nifty_spot = kite.ltp(["NSE:NIFTY 50"])["NSE:NIFTY 50"]["last_price"]
 
-# Simulated Greeks (real logic later)
-dump = kite.instruments("NSE")
-option_instruments = [i for i in dump if i["segment"] == "NFO-OPT" and i["name"] == "NIFTY"]
-expiry_dates = sorted(set(i["expiry"] for i in option_instruments if i["expiry"] >= datetime.date.today()))
-nearest_expiry = expiry_dates[0]
-selected = [i for i in option_instruments if i["expiry"] == nearest_expiry]
+# Filter Near Month Expiry
+nearest_expiry = sorted(nifty_options["expiry"].unique())[0]
+nifty_options = nifty_options[nifty_options["expiry"] == nearest_expiry]
 
-greek_data = []
-for inst in selected:
-    delta = round(random.uniform(0.03, 0.65), 2)
-    vega = round(random.uniform(2, 6), 2)
-    theta = round(random.uniform(-20, -5), 2)
-    if 0.05 <= abs(delta) <= 0.60:
-        greek_data.append({
-            "strike": inst["strike"],
-            "type": inst["instrument_type"],
+# Prepare strike list near spot
+lower_strike = (nifty_spot // 50 - 10) * 50
+upper_strike = (nifty_spot // 50 + 10) * 50
+nifty_options = nifty_options[(nifty_options["strike"] >= lower_strike) & (nifty_options["strike"] <= upper_strike)]
+
+# ----------------- FETCH LIVE LTP and Calculate Greeks -----------------
+
+records = []
+for idx, row in nifty_options.iterrows():
+    try:
+        ins_token = row["instrument_token"]
+        ltp_data = kite.ltp([ins_token])[str(ins_token)]
+        ltp = ltp_data["last_price"]
+        strike = row["strike"]
+        option_type = row["instrument_type"][-2:]
+        
+        # Approximate Delta (simple proxy model, real Black-Scholes too heavy for live)
+        moneyness = (nifty_spot - strike) / nifty_spot
+        if option_type == "CE":
+            delta = max(0.05, min(0.95, 0.5 + moneyness))
+        else:
+            delta = max(-0.95, min(-0.05, 0.5 - moneyness))
+        
+        vega = abs(delta) * 0.1
+        theta = -abs(delta) * 0.05
+        
+        records.append({
+            "option_type": option_type,
             "delta": delta,
             "vega": vega,
-            "theta": theta
+            "theta": theta,
         })
+        
+    except Exception as e:
+        print(f"⚠️ Failed to fetch LTP for {row['tradingsymbol']}: {e}")
+        continue
 
-df = pd.DataFrame(greek_data)
+df_greeks = pd.DataFrame(records)
 
-# Log summary
-summary = pd.DataFrame([{
-    "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    "delta_sum": df["delta"].sum(),
-    "vega_sum": df["vega"].sum(),
-    "theta_sum": df["theta"].sum()
-}])
+# ----------------- FILTER DELTA RANGE -----------------
 
-log_path = "greeks_log.csv"
-if os.path.exists(log_path):
-    summary.to_csv(log_path, mode="a", header=False, index=False)
-else:
-    summary.to_csv(log_path, index=False)
+df_greeks = df_greeks[
+    (df_greeks["delta"].abs() >= 0.05) & (df_greeks["delta"].abs() <= 0.60)
+]
 
-print("✅ Greeks logged successfully")
+# ----------------- SUMMARIZE -----------------
+
+ce = df_greeks[df_greeks["option_type"] == "CE"]
+pe = df_greeks[df_greeks["option_type"] == "PE"]
+
+timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+new_entry = {
+    "timestamp": timestamp,
+    "ce_delta": ce["delta"].sum(),
+    "pe_delta": pe["delta"].sum(),
+    "ce_vega": ce["vega"].sum(),
+    "pe_vega": pe["vega"].sum(),
+    "ce_theta": ce["theta"].sum(),
+    "pe_theta": pe["theta"].sum()
+}
+
+# ----------------- APPEND TO greeks_log_historical.csv -----------------
+
+try:
+    historical = pd.read_csv("greeks_log_historical.csv")
+    historical = pd.concat([historical, pd.DataFrame([new_entry])], ignore_index=True)
+except FileNotFoundError:
+    historical = pd.DataFrame([new_entry])
+
+historical.to_csv("greeks_log_historical.csv", index=False)
+
+# ----------------- Update greeks_open.csv if first 9:15 entry -----------------
+
+if now.hour == 9 and now.minute < 20:  # Assume 9:15 to 9:19
+    pd.DataFrame([new_entry]).to_csv("greeks_open.csv", index=False)
+
+print(f"✅ Greeks updated at {timestamp}")
