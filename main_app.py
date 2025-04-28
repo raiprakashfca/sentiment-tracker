@@ -83,3 +83,13 @@ from streamlit_autorefresh import st_autorefresh
 st.caption("🔄 Auto-refreshes every 1 minute")
 st_autorefresh(interval=60000)  # 60000 ms = 1 minute
 
+# ----------------- FOOTER -----------------
+st.markdown("""---""")
+st.markdown(
+    "<div style='text-align: center; color: grey;'>"
+    "Made with ❤️ by Prakash Rai in partnership with ChatGPT | Powered by Zerodha APIs"
+    "</div>",
+    unsafe_allow_html=True
+)
+
+
