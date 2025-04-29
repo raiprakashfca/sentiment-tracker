@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import datetime
 import pytz
+from streamlit_autorefresh import st_autorefresh
 
 # ----------------- PAGE SETUP -----------------
 st.set_page_config(page_title="📈 Sentiment Tracker", layout="wide")
@@ -42,6 +43,7 @@ try:
 except Exception as e:
     st.error(f"❌ Error loading data: {e}")
     st.stop()
+
 # ----------------- MARKET STATUS -----------------
 now = datetime.datetime.now(ist)
 market_open_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
@@ -49,6 +51,16 @@ market_close_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
 
 if not (market_open_time <= now <= market_close_time):
     st.warning("🏁 **Market Closed for the Day**\n\n✅ Updates will resume next trading session.")
+    
+    # Always show footer even when market is closed
+    st.markdown("""---""")
+    st.markdown(
+        "<div style='text-align: center; color: grey;'>"
+        "Made with ❤️ by Prakash Rai in partnership with ChatGPT | Powered by Zerodha APIs"
+        "</div>",
+        unsafe_allow_html=True
+    )
+
     st.stop()
 
 # ----------------- COLOR CODING -----------------
@@ -78,8 +90,6 @@ st.dataframe(
 st.caption(f"✅ Last updated at: {datetime.datetime.now(ist).strftime('%d-%b-%Y %I:%M:%S %p IST')}")
 
 # ----------------- AUTO REFRESH -----------------
-from streamlit_autorefresh import st_autorefresh
-
 st.caption("🔄 Auto-refreshes every 1 minute")
 st_autorefresh(interval=60000)  # 60000 ms = 1 minute
 
@@ -91,5 +101,3 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True
 )
-
-
