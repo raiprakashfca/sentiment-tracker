@@ -4,7 +4,7 @@ name: 📈 Fetch Live Greeks
 
 on:
   schedule:
-    - cron: '*/1 3-10 * * 1-5'  # Every 1 min from 9:00 to 3:59 IST
+    - cron: '*/1 3-10 * * 1-5'  # 1 min interval from 9AM to 3PM IST
   workflow_dispatch:
 
 jobs:
@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: 📦 Install Dependencies
+      - name: 📦 Install dependencies
         run: |
           pip install pandas kiteconnect gspread oauth2client
 
