@@ -19,7 +19,7 @@ jobs:
 
       - name: 📦 Install dependencies
         run: |
-          pip install pandas kiteconnect gspread oauth2client
+          pip install pandas kiteconnect gspread oauth2client streamlit streamlit-autorefresh pytz
 
       - name: 🏗️ Create .streamlit directory
         run: mkdir -p ~/.streamlit
