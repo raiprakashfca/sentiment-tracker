@@ -1,21 +1,18 @@
+# ✅ fetch_option_data.py
+
 import pandas as pd
 import datetime
-import time
-import pytz
 import os
 import json
-import gspread
+import time
 from kiteconnect import KiteConnect
+import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# ----------------- SETUP -----------------
+# ---------------- SETUP ----------------
 
-# Timezone
-ist = pytz.timezone("Asia/Kolkata")
-
-# Load credentials from Streamlit/Environment
+# Load credentials from GitHub/Streamlit Secrets
 gcreds = json.loads(os.environ["GCREDS"])
-
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 client = gspread.authorize(creds)
@@ -27,106 +24,124 @@ access_token = sheet.acell("C1").value.strip()
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
 
-# ----------------- CHECK MARKET TIME -----------------
+# ---------------- MARKET TIME ----------------
 
+ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 now = datetime.datetime.now(ist)
+
 market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
 market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
 
-if not (market_open <= now <= market_close):
-    print(f"⏳ Outside market hours ({now.strftime('%H:%M:%S')}). Skipping fetch.")
+# ---------------- FETCH INSTRUMENTS ----------------
+
+try:
+    instruments = kite.instruments("NSE")
+    df_instruments = pd.DataFrame(instruments)
+except Exception as e:
+    print(f"❌ Failed fetching instruments: {e}")
     exit()
 
-# ----------------- FETCH NIFTY OPTIONS -----------------
+# ---------------- FILTER NIFTY OPTIONS ----------------
 
-# Fetch instruments
-instruments = pd.DataFrame(kite.instruments("NFO"))
-nifty_options = instruments[
-    (instruments["name"] == "NIFTY") &
-    (instruments["segment"] == "NFO-OPT")
+df_options = df_instruments[
+    (df_instruments["name"] == "NIFTY") &
+    (df_instruments["segment"] == "NFO-OPT") &
+    (df_instruments["exchange"] == "NFO")
 ]
 
-# Get Spot Price
-nifty_spot = kite.ltp(["NSE:NIFTY 50"])["NSE:NIFTY 50"]["last_price"]
+# ---------------- GET SPOT PRICE ----------------
 
-# Filter Near Month Expiry
-nearest_expiry = sorted(nifty_options["expiry"].unique())[0]
-nifty_options = nifty_options[nifty_options["expiry"] == nearest_expiry]
+try:
+    spot = kite.ltp(["NSE:NIFTY 50"])["NSE:NIFTY 50"]["last_price"]
+except Exception as e:
+    print(f"❌ Failed fetching NIFTY spot: {e}")
+    exit()
 
-# Prepare strike list near spot
-lower_strike = (nifty_spot // 50 - 10) * 50
-upper_strike = (nifty_spot // 50 + 10) * 50
-nifty_options = nifty_options[(nifty_options["strike"] >= lower_strike) & (nifty_options["strike"] <= upper_strike)]
+# ---------------- FIND ATM STRIKE ----------------
 
-# ----------------- FETCH LIVE LTP and Calculate Greeks -----------------
+atm = round(spot / 50) * 50
+strike_range = list(range(atm - 500, atm + 550, 50))  # Wider range
+
+# ---------------- FETCH OPTION LTPs ----------------
+
+option_tokens = df_options[
+    (df_options["strike"].isin(strike_range)) &
+    (df_options["expiry"] >= now.date())
+]["instrument_token"].tolist()
+
+try:
+    quotes = kite.ltp(option_tokens)
+except Exception as e:
+    print(f"❌ Failed fetching option quotes: {e}")
+    exit()
+
+# ---------------- ESTIMATE DELTA (Assumed Simple Model) ----------------
+
+def estimate_delta(option_type, strike, spot):
+    diff = abs(strike - spot)
+    if diff > 500:
+        return 0.05
+    elif diff > 400:
+        return 0.10
+    elif diff > 300:
+        return 0.20
+    elif diff > 200:
+        return 0.30
+    elif diff > 100:
+        return 0.40
+    else:
+        return 0.50
 
 records = []
-for idx, row in nifty_options.iterrows():
+
+for token, data in quotes.items():
     try:
-        ins_token = row["instrument_token"]
-        ltp_data = kite.ltp([ins_token])[str(ins_token)]
-        ltp = ltp_data["last_price"]
-        strike = row["strike"]
-        option_type = row["instrument_type"][-2:]
-        
-        # Approximate Delta (simple proxy model, real Black-Scholes too heavy for live)
-        moneyness = (nifty_spot - strike) / nifty_spot
-        if option_type == "CE":
-            delta = max(0.05, min(0.95, 0.5 + moneyness))
-        else:
-            delta = max(-0.95, min(-0.05, 0.5 - moneyness))
-        
-        vega = abs(delta) * 0.1
-        theta = -abs(delta) * 0.05
-        
-        records.append({
-            "option_type": option_type,
-            "delta": delta,
-            "vega": vega,
-            "theta": theta,
-        })
-        
+        opt = df_options[df_options["instrument_token"] == token].iloc[0]
+        strike = opt["strike"]
+        expiry = opt["expiry"]
+        option_type = opt["instrument_type"]  # CE or PE
+        ltp = data["last_price"]
+
+        est_delta = estimate_delta(option_type, strike, spot)
+
+        if 0.05 <= est_delta <= 0.60:
+            records.append({
+                "timestamp": now,
+                "option_type": option_type,
+                "strike": strike,
+                "expiry": expiry,
+                "ltp": ltp,
+                "delta": est_delta,
+            })
     except Exception as e:
-        print(f"⚠️ Failed to fetch LTP for {row['tradingsymbol']}: {e}")
         continue
 
 df_greeks = pd.DataFrame(records)
 
-# ----------------- FILTER DELTA RANGE -----------------
+# ---------------- AGGREGATE GREEKS ----------------
 
-df_greeks = df_greeks[
-    (df_greeks["delta"].abs() >= 0.05) & (df_greeks["delta"].abs() <= 0.60)
-]
-
-# ----------------- SUMMARIZE -----------------
-
-ce = df_greeks[df_greeks["option_type"] == "CE"]
-pe = df_greeks[df_greeks["option_type"] == "PE"]
-
-timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-new_entry = {
-    "timestamp": timestamp,
-    "ce_delta": ce["delta"].sum(),
-    "pe_delta": pe["delta"].sum(),
-    "ce_vega": ce["vega"].sum(),
-    "pe_vega": pe["vega"].sum(),
-    "ce_theta": ce["theta"].sum(),
-    "pe_theta": pe["theta"].sum()
+summary = {
+    "timestamp": now,
+    "ce_delta": df_greeks[df_greeks["option_type"] == "CE"]["delta"].sum(),
+    "pe_delta": df_greeks[df_greeks["option_type"] == "PE"]["delta"].sum(),
+    "ce_vega": 0,   # Placeholder for future vega estimation
+    "pe_vega": 0,
+    "ce_theta": 0,
+    "pe_theta": 0,
 }
 
-# ----------------- APPEND TO greeks_log_historical.csv -----------------
+df_summary = pd.DataFrame([summary])
 
-try:
-    historical = pd.read_csv("greeks_log_historical.csv")
-    historical = pd.concat([historical, pd.DataFrame([new_entry])], ignore_index=True)
-except FileNotFoundError:
-    historical = pd.DataFrame([new_entry])
+# ---------------- SAVE ----------------
 
-historical.to_csv("greeks_log_historical.csv", index=False)
+if not os.path.exists("greeks_log_historical.csv"):
+    df_summary.to_csv("greeks_log_historical.csv", index=False)
+else:
+    df_existing = pd.read_csv("greeks_log_historical.csv")
+    df_existing = pd.concat([df_existing, df_summary], ignore_index=True)
+    df_existing.to_csv("greeks_log_historical.csv", index=False)
 
-# ----------------- Update greeks_open.csv if first 9:15 entry -----------------
+if now.strftime("%H:%M") == "09:15":
+    df_summary.to_csv("greeks_open.csv", index=False)
 
-if now.hour == 9 and now.minute < 20:  # Assume 9:15 to 9:19
-    pd.DataFrame([new_entry]).to_csv("greeks_open.csv", index=False)
-
-print(f"✅ Greeks updated at {timestamp}")
+print("✅ Live Greeks captured successfully.")
