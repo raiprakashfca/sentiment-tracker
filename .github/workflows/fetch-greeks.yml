@@ -1,25 +1,35 @@
-name: 📈 Fetch Live Greeks
+name: 📈 Fetch Live Greeks Every Minute
 
 on:
   schedule:
-    - cron: '*/1 3-10 * * 1-5'  # 9:00 AM to 3:59 PM IST every minute
-  workflow_dispatch:
+    - cron: '*/1 3-10 * * 1-5'  # Every 1 minute from 9:00 to 15:59 IST (Indian market hours)
+  workflow_dispatch:            # Allow manual trigger from GitHub UI if needed
 
 jobs:
   fetch-live-greeks:
     runs-on: ubuntu-latest
+
     steps:
       - name: ⬇️ Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: 🐍 Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: 📦 Install dependencies
+      - name: 📦 Install Python dependencies
         run: |
-          pip install pandas kiteconnect gspread oauth2client streamlit streamlit-autorefresh pytz
+          pip install pandas numpy kiteconnect gspread oauth2client scipy streamlit pytz
 
-      - name: 🚀 Run fetch_option_data.py
+      - name: 🧠 Fetch live Greeks and update file
         run: python fetch_option_data.py
+
+      - name: 📤 Commit & Push updated greeks_log_historical.csv
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add greeks_log_historical.csv
+          git commit -m "🔄 Auto-update Greeks Log at $(date)"
+          git push
+        continue-on-error: true   # In case no changes (no error on empty commit)
