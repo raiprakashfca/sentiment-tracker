@@ -2,14 +2,15 @@ name: 📈 Fetch Live Greeks
 
 on:
   schedule:
-    - cron: '*/1 3-10 * * 1-5'  # 1 min interval from 9AM to 3PM IST
+    - cron: '*/1 3-10 * * 1-5'  # Runs every 1 min between 9AM-3PM IST
   workflow_dispatch:
 
 jobs:
   fetch-live-greeks:
     runs-on: ubuntu-latest
+
     steps:
-      - name: ⬇️ Checkout code
+      - name: ⬇️ Checkout repo
         uses: actions/checkout@v3
 
       - name: 🐍 Set up Python
@@ -17,15 +18,15 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: 📦 Install dependencies
+      - name: 📦 Install Python dependencies
         run: |
           pip install pandas kiteconnect gspread oauth2client streamlit streamlit-autorefresh pytz
 
       - name: 🏗️ Create .streamlit directory
-        run: mkdir -p ~/.streamlit
+        run: mkdir -p /home/runner/.streamlit
 
       - name: 🔐 Write Streamlit secrets
-        run: echo "$STREAMLIT_SECRETS" > ~/.streamlit/secrets.toml
+        run: echo "$STREAMLIT_SECRETS" > /home/runner/.streamlit/secrets.toml
 
       - name: 🚀 Run fetch_option_data.py
         run: python fetch_option_data.py
