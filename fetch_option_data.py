@@ -4,14 +4,11 @@ import pandas as pd
 import datetime
 import os
 import json
-import time
 from kiteconnect import KiteConnect
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# ---------------- SETUP ----------------
-
-# Load credentials from GitHub/Streamlit Secrets
+# --------------- SETUP ---------------
 gcreds = json.loads(os.environ["GCREDS"])
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
@@ -24,46 +21,37 @@ access_token = sheet.acell("C1").value.strip()
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
 
-# ---------------- MARKET TIME ----------------
-
+# --------------- MARKET TIME ---------------
 ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 now = datetime.datetime.now(ist)
 
-market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
-market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
-
-# ---------------- FETCH INSTRUMENTS ----------------
-
+# --------------- FETCH INSTRUMENTS ---------------
 try:
     instruments = kite.instruments("NSE")
     df_instruments = pd.DataFrame(instruments)
 except Exception as e:
-    print(f"❌ Failed fetching instruments: {e}")
+    print(f"❌ Failed to fetch instruments: {e}")
     exit()
 
-# ---------------- FILTER NIFTY OPTIONS ----------------
-
+# --------------- FILTER NIFTY OPTIONS ---------------
 df_options = df_instruments[
     (df_instruments["name"] == "NIFTY") &
     (df_instruments["segment"] == "NFO-OPT") &
     (df_instruments["exchange"] == "NFO")
 ]
 
-# ---------------- GET SPOT PRICE ----------------
-
+# --------------- GET SPOT PRICE ---------------
 try:
     spot = kite.ltp(["NSE:NIFTY 50"])["NSE:NIFTY 50"]["last_price"]
 except Exception as e:
-    print(f"❌ Failed fetching NIFTY spot: {e}")
+    print(f"❌ Failed to fetch NIFTY spot: {e}")
     exit()
 
-# ---------------- FIND ATM STRIKE ----------------
-
+# --------------- SELECT STRIKE RANGE ---------------
 atm = round(spot / 50) * 50
-strike_range = list(range(atm - 500, atm + 550, 50))  # Wider range
+strike_range = list(range(atm - 500, atm + 550, 50))
 
-# ---------------- FETCH OPTION LTPs ----------------
-
+# --------------- FETCH OPTION LTPs ---------------
 option_tokens = df_options[
     (df_options["strike"].isin(strike_range)) &
     (df_options["expiry"] >= now.date())
@@ -72,11 +60,10 @@ option_tokens = df_options[
 try:
     quotes = kite.ltp(option_tokens)
 except Exception as e:
-    print(f"❌ Failed fetching option quotes: {e}")
+    print(f"❌ Failed fetching quotes: {e}")
     exit()
 
-# ---------------- ESTIMATE DELTA (Assumed Simple Model) ----------------
-
+# --------------- ESTIMATE DELTA ---------------
 def estimate_delta(option_type, strike, spot):
     diff = abs(strike - spot)
     if diff > 500:
@@ -99,7 +86,7 @@ for token, data in quotes.items():
         opt = df_options[df_options["instrument_token"] == token].iloc[0]
         strike = opt["strike"]
         expiry = opt["expiry"]
-        option_type = opt["instrument_type"]  # CE or PE
+        option_type = opt["instrument_type"]
         ltp = data["last_price"]
 
         est_delta = estimate_delta(option_type, strike, spot)
@@ -113,18 +100,17 @@ for token, data in quotes.items():
                 "ltp": ltp,
                 "delta": est_delta,
             })
-    except Exception as e:
+    except Exception:
         continue
 
 df_greeks = pd.DataFrame(records)
 
-# ---------------- AGGREGATE GREEKS ----------------
-
+# --------------- SUMMARIZE GREEKS ---------------
 summary = {
     "timestamp": now,
     "ce_delta": df_greeks[df_greeks["option_type"] == "CE"]["delta"].sum(),
     "pe_delta": df_greeks[df_greeks["option_type"] == "PE"]["delta"].sum(),
-    "ce_vega": 0,   # Placeholder for future vega estimation
+    "ce_vega": 0,
     "pe_vega": 0,
     "ce_theta": 0,
     "pe_theta": 0,
@@ -132,8 +118,7 @@ summary = {
 
 df_summary = pd.DataFrame([summary])
 
-# ---------------- SAVE ----------------
-
+# --------------- SAVE ---------------
 if not os.path.exists("greeks_log_historical.csv"):
     df_summary.to_csv("greeks_log_historical.csv", index=False)
 else:
@@ -141,6 +126,7 @@ else:
     df_existing = pd.concat([df_existing, df_summary], ignore_index=True)
     df_existing.to_csv("greeks_log_historical.csv", index=False)
 
+# Save 9:15 AM Open
 if now.strftime("%H:%M") == "09:15":
     df_summary.to_csv("greeks_open.csv", index=False)
 
