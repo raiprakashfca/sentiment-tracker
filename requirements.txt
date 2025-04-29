@@ -1,6 +1,6 @@
 streamlit
-kiteconnect
 pandas
+kiteconnect
 gspread
 oauth2client
-streamlit-autorefresh
+pytz
