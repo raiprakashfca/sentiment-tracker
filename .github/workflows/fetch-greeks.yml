@@ -1,5 +1,3 @@
-# ✅ fetch_greeks.yml
-
 name: 📈 Fetch Live Greeks
 
 on:
@@ -22,6 +20,12 @@ jobs:
       - name: 📦 Install dependencies
         run: |
           pip install pandas kiteconnect gspread oauth2client
+
+      - name: 🏗️ Create .streamlit directory
+        run: mkdir -p ~/.streamlit
+
+      - name: 🔐 Write Streamlit secrets
+        run: echo "$STREAMLIT_SECRETS" > ~/.streamlit/secrets.toml
 
       - name: 🚀 Run fetch_option_data.py
         run: python fetch_option_data.py
