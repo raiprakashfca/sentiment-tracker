@@ -4,3 +4,4 @@ kiteconnect
 gspread
 oauth2client
 pytz
+streamlit-autorefresh
