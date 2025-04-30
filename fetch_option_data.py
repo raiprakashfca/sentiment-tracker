@@ -1,132 +1,118 @@
+import os
+import json
+import math
+import time
 import pandas as pd
-import numpy as np
-import datetime
-import pytz
 from kiteconnect import KiteConnect
-from scipy.stats import norm
-import streamlit as st
+from datetime import datetime
+import pytz
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from scipy.stats import norm
 
-# ----------------- CONSTANTS -----------------
+# ---------- TIMEZONE ----------
 ist = pytz.timezone("Asia/Kolkata")
-now = datetime.datetime.now(ist)
+now = datetime.now(ist)
+date_str = now.strftime('%Y-%m-%d')
+time_str = now.strftime('%H:%M')
 
-# ----------------- READ SECRETS -----------------
-api_key = st.secrets["api_key"]
-api_secret = st.secrets["api_secret"]
-access_token = st.secrets["access_token"]
-gcreds = st.secrets["gcreds"]
+# ---------- GOOGLE SHEET SETUP ----------
+gcreds = None
+if "GCREDS" in os.environ:
+    try:
+        gcreds = json.loads(os.environ["GCREDS"])
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
+        sheet_client = gspread.authorize(creds)
+        log_sheet = sheet_client.open("GreeksLog").worksheet("Live")
+    except Exception as e:
+        print("⚠️ Failed to connect to Google Sheets:", e)
 
-# ----------------- INITIATE KITE -----------------
+# ---------- ZERODHA SETUP ----------
+api_key = os.environ.get("ZERODHA_API_KEY")
+access_token = os.environ.get("ZERODHA_ACCESS_TOKEN")
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
 
-# ----------------- BLACK-SCHOLES GREEKS CALCULATOR -----------------
-def calculate_greeks(option_type, spot, strike, expiry, price, iv):
-    T = (expiry - now).total_seconds() / (365 * 24 * 60 * 60)
-    r = 0.06  # risk-free rate assumed 6%
-    sigma = iv / 100
+# ---------- GET SPOT PRICE ----------
+spot_price = kite.ltp(["NSE:NIFTY 50"])["NSE:NIFTY 50"]["last_price"]
+print("🔍 NIFTY Spot:", spot_price)
 
-    if T <= 0 or sigma <= 0:
-        return 0, 0, 0
+# ---------- GET INSTRUMENTS ----------
+instruments = kite.instruments("NFO")
+nifty_opts = [i for i in instruments if i["name"] == "NIFTY" and i["instrument_type"] == "OPTIDX"]
 
-    d1 = (np.log(spot/strike) + (r + sigma**2/2)*T) / (sigma*np.sqrt(T))
-    d2 = d1 - sigma*np.sqrt(T)
+# ---------- EXPIRY + ATM ----------
+expiries = sorted(list(set([i["expiry"] for i in nifty_opts])))
+nearest_expiry = expiries[0]
+atm_strike = round(spot_price / 50) * 50
 
-    if option_type == 'CE':
+# ---------- BLACK-SCHOLES ----------
+def black_scholes_greeks(option_type, S, K, T, r, sigma):
+    d1 = (math.log(S / K) + (r + sigma**2 / 2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    if option_type == "CE":
         delta = norm.cdf(d1)
+        theta = (-S * norm.pdf(d1) * sigma / (2 * math.sqrt(T)) - r * K * math.exp(-r*T) * norm.cdf(d2)) / 365
     else:
         delta = -norm.cdf(-d1)
+        theta = (-S * norm.pdf(d1) * sigma / (2 * math.sqrt(T)) + r * K * math.exp(-r*T) * norm.cdf(-d2)) / 365
+    vega = S * norm.pdf(d1) * math.sqrt(T) / 100
+    return round(delta, 4), round(theta, 2), round(vega, 2)
 
-    vega = (spot * norm.pdf(d1) * np.sqrt(T)) / 100
-    theta = -(spot * norm.pdf(d1) * sigma) / (2*np.sqrt(T)) - r*strike*np.exp(-r*T)*norm.cdf(d2 if option_type == 'CE' else -d2)
-    theta /= 365
+# ---------- GREEKS LOGIC ----------
+greeks = {"ce_delta": 0, "pe_delta": 0, "ce_theta": 0, "pe_theta": 0, "ce_vega": 0, "pe_vega": 0}
 
-    return delta, vega, theta
-
-# ----------------- FETCH INSTRUMENTS -----------------
-instruments = kite.instruments("NFO")
-nifty_options = [i for i in instruments if i["name"] == "NIFTY" and i["instrument_type"] in ("CE", "PE")]
-
-# ----------------- FETCH SPOT PRICE -----------------
-nifty_spot = kite.ltp(["NSE:NIFTY 50"])["NSE:NIFTY 50"]["last_price"]
-
-# ----------------- FETCH OPTION CHAIN DATA -----------------
-tokens = [i["instrument_token"] for i in nifty_options]
-ltp_data = kite.ltp(tokens)
-
-# ----------------- PROCESS DATA -----------------
-rows = []
-for inst in nifty_options:
-    token = inst["instrument_token"]
-    if token not in ltp_data:
+for opt in nifty_opts:
+    if opt["expiry"] != nearest_expiry:
         continue
-    price = ltp_data[token]["last_price"]
-    expiry = inst["expiry"]
-    strike = inst["strike"]
-    option_type = inst["instrument_type"]
-    iv = 18  # assume 18% IV if not available dynamically
+    option_type = opt["instrument_type"]
+    strike = opt["strike"]
+    token = opt["instrument_token"]
 
-    delta, vega, theta = calculate_greeks(option_type, nifty_spot, strike, expiry, price, iv)
+    try:
+        ltp = kite.ltp([token])[str(token)]["last_price"]
+        iv = opt.get("implied_volatility", 0.18)  # fallback IV
+        r = 0.06
+        T = (opt["expiry"] - now.date()).days / 365
+        if T <= 0:
+            continue
 
-    rows.append({
-        "option_type": option_type,
-        "strike": strike,
-        "expiry": expiry,
-        "price": price,
-        "delta": delta,
-        "vega": vega,
-        "theta": theta
-    })
+        delta, theta, vega = black_scholes_greeks(option_type, spot_price, strike, T, r, iv)
 
-df = pd.DataFrame(rows)
+        if 0.05 <= abs(delta) <= 0.60:
+            if option_type == "CE":
+                greeks["ce_delta"] += delta
+                greeks["ce_theta"] += theta
+                greeks["ce_vega"] += vega
+            else:
+                greeks["pe_delta"] += delta
+                greeks["pe_theta"] += theta
+                greeks["pe_vega"] += vega
 
-# ----------------- FILTER STRIKES BY DELTA -----------------
-df = df[(df["delta"].abs() >= 0.05) & (df["delta"].abs() <= 0.60)]
+    except Exception as e:
+        print(f"⚠️ {option_type} {strike} skipped due to error: {e}")
 
-# ----------------- SUM GREEKS -----------------
-ce_df = df[df["option_type"] == "CE"]
-pe_df = df[df["option_type"] == "PE"]
-
-summary = {
-    "timestamp": now.strftime('%Y-%m-%d %H:%M:%S'),
-    "ce_delta": ce_df["delta"].sum(),
-    "pe_delta": pe_df["delta"].sum(),
-    "ce_vega": ce_df["vega"].sum(),
-    "pe_vega": pe_df["vega"].sum(),
-    "ce_theta": ce_df["theta"].sum(),
-    "pe_theta": pe_df["theta"].sum(),
+# ---------- SAVE TO CSV ----------
+df_row = {
+    "timestamp": now.isoformat(),
+    **greeks
 }
+log_path = "greeks_log_historical.csv"
+open_path = "greeks_open.csv"
 
-# ----------------- SAVE TO CSV -----------------
-csv_path = "greeks_log_historical.csv"
+if os.path.exists(log_path):
+    pd.read_csv(log_path).append(df_row, ignore_index=True).to_csv(log_path, index=False)
+else:
+    pd.DataFrame([df_row]).to_csv(log_path, index=False)
 
-try:
-    df_existing = pd.read_csv(csv_path)
-    df_new = pd.concat([df_existing, pd.DataFrame([summary])], ignore_index=True)
-except FileNotFoundError:
-    df_new = pd.DataFrame([summary])
+# Save open snapshot if it's 9:15 AM
+if time_str == "09:15":
+    pd.DataFrame([df_row]).to_csv(open_path, index=False)
 
-df_new.to_csv(csv_path, index=False)
-print("✅ Greeks logged to CSV:", csv_path)
-
-# ----------------- (Optional) BACKUP TO GOOGLE SHEETS -----------------
-try:
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
-    client = gspread.authorize(creds)
-    sheet = client.open("SentimentTrackerStore").worksheet("LiveGreeks")
-
-    sheet.append_row([
-        summary["timestamp"],
-        summary["ce_delta"],
-        summary["pe_delta"],
-        summary["ce_vega"],
-        summary["pe_vega"],
-        summary["ce_theta"],
-        summary["pe_theta"]
-    ])
-    print("✅ Backup to Google Sheet successful")
-except Exception as e:
-    print(f"❌ Backup to Google Sheet failed: {e}")
+# ---------- GOOGLE SHEET SYNC ----------
+if gcreds:
+    try:
+        log_sheet.append_row([now.strftime('%H:%M:%S')] + list(greeks.values()))
+    except Exception as e:
+        print("⚠️ Sheet update failed:", e)
