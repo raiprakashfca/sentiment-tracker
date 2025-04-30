@@ -1,49 +1,41 @@
 import pandas as pd
 import os
 from datetime import datetime
+import pytz
 
-# ----------------- File Paths -----------------
-LIVE_LOG_PATH = "greeks_log.csv"
-HISTORICAL_LOG_PATH = "greeks_log_historical.csv"
-OPEN_PATH = "greeks_open.csv"
+# ----------- TIMEZONE SETUP -----------
+ist = pytz.timezone("Asia/Kolkata")
 
-# ----------------- Check File Availability -----------------
-use_historical = False
-if not os.path.exists(LIVE_LOG_PATH):
-    if os.path.exists(HISTORICAL_LOG_PATH):
-        use_historical = True
-        log_path = HISTORICAL_LOG_PATH
-    else:
-        raise FileNotFoundError("❌ No Greek log file (live or historical) found.")
-else:
-    log_path = LIVE_LOG_PATH
+# ----------- FILE PATHS -----------
+open_file = "greeks_open.csv"
+log_file = "greeks_log_historical.csv"
 
-# ----------------- Load Baseline -----------------
-if not os.path.exists(OPEN_PATH):
+# ----------- LOAD BASELINE (MARKET OPEN GREEKS) -----------
+if not os.path.exists(open_file):
     raise FileNotFoundError("❌ Market open baseline file not found.")
 
-open_df = pd.read_csv(OPEN_PATH)
-log_df = pd.read_csv(log_path)
+open_df = pd.read_csv(open_file)
+open_df["timestamp"] = pd.to_datetime(open_df["timestamp"])
 
-# ----------------- Compute Changes -----------------
+baseline = open_df.iloc[0]  # 9:15 AM snapshot
+
+# ----------- LOAD HISTORICAL LOG -----------
+log_df = pd.read_csv(log_file)
 log_df["timestamp"] = pd.to_datetime(log_df["timestamp"])
 
-latest = log_df.iloc[-1]
+# ----------- COMPARE LIVE TO BASELINE -----------
+summary = []
 
-metrics = {
-    "ce_delta_change": latest["ce_delta_change"],
-    "pe_delta_change": latest["pe_delta_change"],
-    "ce_vega_change": latest["ce_vega_change"],
-    "pe_vega_change": latest["pe_vega_change"],
-    "ce_theta_change": latest["ce_theta_change"],
-    "pe_theta_change": latest["pe_theta_change"],
-}
+for _, row in log_df.iterrows():
+    summary.append({
+        "timestamp": row["timestamp"],
+        "ce_delta_change": row["ce_delta"] - baseline["ce_delta"],
+        "pe_delta_change": row["pe_delta"] - baseline["pe_delta"],
+        "ce_vega_change": row["ce_vega"] - baseline["ce_vega"],
+        "pe_vega_change": row["pe_vega"] - baseline["pe_vega"],
+        "ce_theta_change": row["ce_theta"] - baseline["ce_theta"],
+        "pe_theta_change": row["pe_theta"] - baseline["pe_theta"],
+    })
 
-# ----------------- Output Data for Use in app -----------------
-summary = {
-    "source": "Historical" if use_historical else "Live",
-    "timestamp": latest["timestamp"].strftime("%Y-%m-%d %H:%M:%S"),
-    "metrics": metrics,
-    "open_df": open_df,
-    "log_df": log_df,
-}
+summary_df = pd.DataFrame(summary)
+summary_df["timestamp"] = summary_df["timestamp"].dt.tz_localize("Asia/Kolkata")
