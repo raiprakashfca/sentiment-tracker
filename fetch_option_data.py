@@ -8,13 +8,13 @@ from oauth2client.service_account import ServiceAccountCredentials
 import gspread
 import numpy as np
 from scipy.stats import norm
+import toml
 
 # -------------------- TIME --------------------
 ist = pytz.timezone("Asia/Kolkata")
 now = datetime.datetime.now(ist)
 
 # -------------------- GCREDS --------------------
-import toml
 secrets = toml.load(os.path.expanduser("~/.streamlit/secrets.toml"))
 gcreds = json.loads(secrets["GCREDS"])
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -76,7 +76,7 @@ r = 0.06
 iv = 0.14  # You can tune this
 
 # -------------------- LTP FETCH --------------------
-print("📡 Fetching option prices...")
+print("📱 Fetching option prices...")
 ce_ltp = kite.ltp(ce_opts["instrument_token"].astype(int).tolist())
 pe_ltp = kite.ltp(pe_opts["instrument_token"].astype(int).tolist())
 
