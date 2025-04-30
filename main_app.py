@@ -39,7 +39,7 @@ Tracking both **CE** and **PE** separately.
 # ----------------- LOAD DATA -----------------
 try:
     df = pd.read_csv("greeks_log_historical.csv")
-    df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_localize("Asia/Kolkata")
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert("Asia/Kolkata")
 except Exception as e:
     st.error(f"❌ Error loading data: {e}")
     st.stop()
