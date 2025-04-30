@@ -30,12 +30,22 @@ Tracks the *real-time change* in Delta, Vega, Theta for NIFTY Options (Delta 0.0
 **Both CE and PE tracked separately**.
 """)
 
-# ----------------- LOAD DATA -----------------
+# ----------------- LOAD OPEN BASELINE -----------------
+try:
+    open_df = pd.read_csv("greeks_open.csv")
+    open_vals = open_df.iloc[0].to_dict()
+except Exception as e:
+    st.error(f"❌ Missing or corrupted greeks_open.csv: {e}")
+    st.stop()
+
+# ----------------- LOAD HISTORICAL LOG -----------------
 try:
     df = pd.read_csv("greeks_log_historical.csv")
-    df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_localize("UTC").dt.tz_convert(ist)
+    if df["timestamp"].dtype == 'O':
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df["timestamp"] = df["timestamp"].dt.tz_convert(ist)
 except Exception as e:
-    st.error(f"❌ Error loading data: {e}")
+    st.error(f"❌ Error loading greeks_log_historical.csv: {e}")
     st.stop()
 
 # ----------------- CHECK MARKET STATUS -----------------
@@ -45,6 +55,14 @@ market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
 if not (market_open <= now <= market_close):
     st.warning("🏁 **Market Closed** — Updates will resume on next trading session.")
     st.stop()
+
+# ----------------- CALCULATE GREEK CHANGES -----------------
+df["ce_delta_change"] = df["ce_delta"] - open_vals["ce_delta_open"]
+df["pe_delta_change"] = df["pe_delta"] - open_vals["pe_delta_open"]
+df["ce_vega_change"] = df["ce_vega"] - open_vals["ce_vega_open"]
+df["pe_vega_change"] = df["pe_vega"] - open_vals["pe_vega_open"]
+df["ce_theta_change"] = df["ce_theta"] - open_vals["ce_theta_open"]
+df["pe_theta_change"] = df["pe_theta"] - open_vals["pe_theta_open"]
 
 # ----------------- COLOR FORMAT -----------------
 def colorize(val):
