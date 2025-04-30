@@ -14,7 +14,9 @@ ist = pytz.timezone("Asia/Kolkata")
 now = datetime.datetime.now(ist)
 
 # -------------------- GCREDS --------------------
-gcreds = json.loads(os.environ["GCREDS"])
+import toml
+secrets = toml.load(os.path.expanduser("~/.streamlit/secrets.toml"))
+gcreds = json.loads(secrets["GCREDS"])
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 client = gspread.authorize(creds)
