@@ -39,7 +39,7 @@ Tracking both **CE** and **PE** separately.
 # ----------------- LOAD DATA -----------------
 try:
     df = pd.read_csv("greeks_log_historical.csv")
-    df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_convert("Asia/Kolkata")
+    df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_localize("Asia/Kolkata")
 except Exception as e:
     st.error(f"❌ Error loading data: {e}")
     st.stop()
@@ -51,16 +51,6 @@ market_close_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
 
 if not (market_open_time <= now <= market_close_time):
     st.warning("🏁 **Market Closed for the Day**\n\n✅ Updates will resume next trading session.")
-    
-    # Always show footer even when market is closed
-    st.markdown("""---""")
-    st.markdown(
-        "<div style='text-align: center; color: grey;'>"
-        "Made with ❤️ by Prakash Rai in partnership with ChatGPT | Powered by Zerodha APIs"
-        "</div>",
-        unsafe_allow_html=True
-    )
-
     st.stop()
 
 # ----------------- COLOR CODING -----------------
@@ -91,7 +81,7 @@ st.caption(f"✅ Last updated at: {datetime.datetime.now(ist).strftime('%d-%b-%Y
 
 # ----------------- AUTO REFRESH -----------------
 st.caption("🔄 Auto-refreshes every 1 minute")
-st_autorefresh(interval=60000)  # 60000 ms = 1 minute
+st_autorefresh(interval=60000)
 
 # ----------------- FOOTER -----------------
 st.markdown("""---""")
