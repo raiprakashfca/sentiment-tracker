@@ -1,35 +1,44 @@
-name: 📈 Fetch Live Greeks Every Minute
+name: 🔢 Fetch Option Greeks
 
 on:
   schedule:
-    - cron: '*/1 3-10 * * 1-5'  # Every 1 minute from 9:00 to 15:59 IST (Indian market hours)
-  workflow_dispatch:            # Allow manual trigger from GitHub UI if needed
+    - cron: '*/5 3-9 * * 1-5'  # Every 5 minutes during market hours (IST 8:30-15:30)
+  workflow_dispatch:
 
 jobs:
-  fetch-live-greeks:
+  run-fetch:
     runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Kolkata
 
     steps:
-      - name: ⬇️ Checkout code
-        uses: actions/checkout@v4
+      - name: ⬇️ Checkout repo
+        uses: actions/checkout@v3
 
-      - name: 🐍 Set up Python
+      - name: 🤳 Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: 📦 Install Python dependencies
-        run: |
-          pip install pandas numpy kiteconnect gspread oauth2client scipy streamlit pytz
+      - name: 📁 Create secrets directory
+        run: mkdir -p ~/.streamlit
 
-      - name: 🧠 Fetch live Greeks and update file
+      - name: 🔐 Write secrets.toml
+        run: echo "$STREAMLIT_SECRETS" > ~/.streamlit/secrets.toml
+        env:
+          STREAMLIT_SECRETS: ${{ secrets.STREAMLIT_SECRETS }}
+
+      - name: 📦 Install dependencies
+        run: |
+          pip install pandas numpy gspread oauth2client kiteconnect scipy
+
+      - name: ⏳ Run Greek Logger
         run: python fetch_option_data.py
 
-      - name: 📤 Commit & Push updated greeks_log_historical.csv
+      - name: 📃 Commit & Push greeks_log
         run: |
+          git config --global user.email "actions@github.com"
           git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add greeks_log_historical.csv
-          git commit -m "🔄 Auto-update Greeks Log at $(date)"
-          git push
-        continue-on-error: true   # In case no changes (no error on empty commit)
+          git add greeks_log_historical.csv greeks_open.csv || echo "No file to add"
+          git commit -m "♻️ Update Greeks Log [bot]" || echo "Nothing to commit"
+          git push || echo "No changes to push"
