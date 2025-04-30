@@ -7,7 +7,6 @@ import json
 import pandas as pd
 
 # -------------------- SETUP HOLIDAY LIST --------------------
-
 nse_holidays_2025 = [
     datetime.date(2025, 1, 26),  # Republic Day
     datetime.date(2025, 2, 26),  # Mahashivratri
@@ -34,10 +33,7 @@ def get_last_trading_day(today, holidays):
     return last_day
 
 # -------------------- LOAD GOOGLE SHEET CREDENTIALS --------------------
-
-# Load from GitHub Actions secret
 gcreds = json.loads(os.environ["GCREDS"])
-
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 client = gspread.authorize(creds)
@@ -47,7 +43,6 @@ api_key = sheet.acell("A1").value.strip()
 access_token = sheet.acell("C1").value.strip()
 
 # -------------------- TOKEN VALIDATOR --------------------
-
 print("🔐 Token Validator:")
 print(f"📎 API Key         : {api_key}")
 print(f"🔑 Access Token    : {access_token[:6]}...{access_token[-6:]}")
@@ -55,12 +50,10 @@ print(f"🕒 Current Time    : {datetime.datetime.now().strftime('%Y-%m-%d %H:%M
 print("-" * 40)
 
 # -------------------- INIT KITE --------------------
-
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
 
 # -------------------- DETECT LAST TRADING DAY --------------------
-
 today = datetime.date.today()
 last_trading_day = get_last_trading_day(today, nse_holidays_2025)
 print(f"📆 Last Trading Day: {last_trading_day}")
@@ -69,12 +62,10 @@ from_time = datetime.datetime.combine(last_trading_day, datetime.time(9, 15))
 to_time = datetime.datetime.combine(last_trading_day, datetime.time(15, 30))
 
 # -------------------- USE FIXED INSTRUMENT TOKEN FOR NIFTY 50 --------------------
-
 instrument_token = 256265  # NIFTY 50 index token
 print(f"🎯 Using Instrument Token for NIFTY 50: {instrument_token}")
 
 # -------------------- FETCH HISTORICAL OHLC DATA --------------------
-
 try:
     ohlc = kite.historical_data(
         instrument_token,
@@ -84,7 +75,7 @@ try:
         continuous=False
     )
     df = pd.DataFrame(ohlc)
+    df.to_csv("nifty_ohlc.csv", index=False)
     print(f"✅ Retrieved {len(df)} candles for {last_trading_day}")
-    print(df.head())
 except Exception as e:
     print(f"❌ Failed to fetch historical data: {e}")
