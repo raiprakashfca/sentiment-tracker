@@ -1,0 +1,39 @@
+name: 🕒 Backfill NIFTY OHLC
+
+on:
+  schedule:
+    - cron: '15 10 * * 1-5'  # 3:45 PM IST (10:15 UTC) on weekdays
+  workflow_dispatch:
+
+jobs:
+  backfill-ohlc:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ⬇️ Checkout repo
+        uses: actions/checkout@v3
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 📦 Install dependencies
+        run: |
+          pip install pandas gspread oauth2client kiteconnect
+
+      - name: 🔐 Write Streamlit Secrets
+        run: |
+          mkdir -p ~/.streamlit
+          echo "$STREAMLIT_SECRETS" > ~/.streamlit/secrets.toml
+
+      - name: 🧠 Run Backfill Script
+        run: python fetch_historical_data.py
+
+      - name: 💾 Commit & Push
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add nifty_ohlc.csv
+          git commit -m "📊 Update nifty_ohlc.csv [auto]" || echo "No changes to commit"
+          git push
