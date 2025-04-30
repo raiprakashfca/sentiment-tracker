@@ -15,8 +15,12 @@ ist = pytz.timezone("Asia/Kolkata")
 now = datetime.datetime.now(ist)
 
 # -------------------- GCREDS --------------------
-secrets = toml.load(os.path.expanduser("~/.streamlit/secrets.toml"))
-gcreds = json.loads(secrets["GCREDS"])
+if os.path.exists(".streamlit/secrets.toml"):
+    secrets = toml.load(".streamlit/secrets.toml")
+    gcreds = json.loads(secrets["GCREDS"])
+else:
+    gcreds = json.loads(os.environ["GCREDS"])
+
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 client = gspread.authorize(creds)
@@ -55,10 +59,7 @@ pe_opts = nifty_opts[(nifty_opts["expiry"] == nearest_expiry) & (nifty_opts["ins
 # -------------------- CALCULATE DELTA RANGE --------------------
 def black_scholes_delta(option_type, S, K, T, r, sigma):
     d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-    if option_type == "CE":
-        return norm.cdf(d1)
-    else:
-        return -norm.cdf(-d1)
+    return norm.cdf(d1) if option_type == "CE" else -norm.cdf(-d1)
 
 def get_greeks(row, S, T, r, sigma):
     K = row["strike"]
@@ -71,12 +72,12 @@ def get_greeks(row, S, T, r, sigma):
     return pd.Series([delta, vega, theta])
 
 # -------------------- MARKET SETTINGS --------------------
-T = 1 / 12  # ~22 trading days
+T = 1 / 12
 r = 0.06
-iv = 0.14  # You can tune this
+iv = 0.14
 
 # -------------------- LTP FETCH --------------------
-print("📱 Fetching option prices...")
+print("📡 Fetching option prices...")
 ce_ltp = kite.ltp(ce_opts["instrument_token"].astype(int).tolist())
 pe_ltp = kite.ltp(pe_opts["instrument_token"].astype(int).tolist())
 
@@ -106,16 +107,19 @@ print(f"✅ Greeks logged at {timestamp}")
 
 # -------------------- SAVE TO CSV --------------------
 row = pd.DataFrame([data])
-
 if not os.path.exists("greeks_log_historical.csv"):
     row.to_csv("greeks_log_historical.csv", index=False)
 else:
     row.to_csv("greeks_log_historical.csv", mode='a', header=False, index=False)
 
-# Save open snapshot if 9:15
-if now.strftime("%H:%M") == "09:15":
+# Save open snapshot if not already saved today
+open_snapshot_path = "greeks_open.csv"
+if not os.path.exists(open_snapshot_path):
+    print("📥 Saving open snapshot as it does not exist.")
     row.rename(columns={
         "ce_delta": "ce_delta_open", "pe_delta": "pe_delta_open",
         "ce_vega": "ce_vega_open", "pe_vega": "pe_vega_open",
         "ce_theta": "ce_theta_open", "pe_theta": "pe_theta_open"
-    }).to_csv("greeks_open.csv", index=False)
+    }).to_csv(open_snapshot_path, index=False)
+else:
+    print("📁 Open snapshot already exists. Skipping.")
