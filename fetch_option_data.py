@@ -17,7 +17,7 @@ ist = pytz.timezone("Asia/Kolkata")
 now = datetime.datetime.now(ist)
 today = now.date()
 
-# NSE Holidays for 2025 (update as needed)
+# NSE Holidays for 2025
 nse_holidays = [
     datetime.date(2025,1,26), datetime.date(2025,2,26), datetime.date(2025,3,14),
     datetime.date(2025,3,31), datetime.date(2025,4,10), datetime.date(2025,4,14),
@@ -25,7 +25,6 @@ nse_holidays = [
     datetime.date(2025,8,27), datetime.date(2025,10,2), datetime.date(2025,10,21),
     datetime.date(2025,10,22), datetime.date(2025,11,5), datetime.date(2025,12,25)
 ]
-
 # Skip weekends and holidays
 if today.weekday() >= 5 or today in nse_holidays:
     print("❌ Market closed or holiday. Exiting.")
@@ -35,24 +34,29 @@ if today.weekday() >= 5 or today in nse_holidays:
 is_open_snapshot = now.strftime("%H:%M") == "09:15"
 
 # -------------------- LOAD CREDENTIALS --------------------
+# Attempt to load service account creds from Streamlit secrets TOML
+secrets_path = os.path.expanduser("~/.streamlit/secrets.toml")
 gcreds = None
-# Try Streamlit secrets file
-dir_secrets = os.path.expanduser("~/.streamlit/secrets.toml")
-if os.path.exists(dir_secrets):
-    sec = toml.load(dir_secrets)
-    gcreds_str = sec.get("GCREDS") or sec.get("gcreds")
-    if gcreds_str:
-        gcreds = json.loads(gcreds_str)
-# Fallback to environment
+if os.path.exists(secrets_path):
+    sec = toml.load(secrets_path)
+    # sec['gcreds'] is a dict when stored as TOML table
+    if isinstance(sec.get("gcreds"), dict):
+        gcreds = sec.get("gcreds")
+    elif isinstance(sec.get("GCREDS"), dict):
+        gcreds = sec.get("GCREDS")
+# Fallback to environment variables (JSON string)
 if not gcreds:
-    if "GCREDS" in os.environ:
-        gcreds = json.loads(os.environ["GCREDS"])
-    elif "gcreds" in os.environ:
-        gcreds = json.loads(os.environ["gcreds"])
+    raw = os.environ.get("GCREDS") or os.environ.get("gcreds")
+    if raw:
+        try:
+            gcreds = json.loads(raw)
+        except json.JSONDecodeError:
+            raise RuntimeError("❌ GCREDS environment variable is not valid JSON.")
+# Final check
 if not gcreds:
-    raise RuntimeError("❌ GCREDS not found in secrets.toml or environment.")
+    raise RuntimeError("❌ GCREDS not found in Streamlit secrets TOML or environment variables.")
 
-# -------------------- GOOGLE SHEETS AUTH --------------------
+# -------------------- GOOGLE SHEETS AUTH -------------------- --------------------
 scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 gc = gspread.authorize(creds)
@@ -74,6 +78,7 @@ def kite_call(fn, *args, retries=3, delay=2, **kwargs):
             time.sleep(delay)
     raise RuntimeError("Kite API failed after retries")
 
+from kiteconnect import KiteConnect
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
 # Validate token
