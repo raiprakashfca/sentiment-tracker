@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import datetime
 import pytz
-import toml
 import os
 import json
 import gspread
@@ -40,63 +39,36 @@ Tracking both **CE** and **PE** separately.
 """)
 
 # ----------------- LOAD GOOGLE SHEET DATA -----------------
-# ----------------- LOAD GOOGLE SHEET DATA -----------------
-# Load GCREDS from Streamlit secrets, fallback to file or env var
-gcreds = None
-if hasattr(st, "secrets"):
-    if "GCREDS" in st.secrets:
-        gcreds = st.secrets["GCREDS"]
-    elif "gcreds" in st.secrets:
-        gcreds = st.secrets["gcreds"]
-# fallback to local secrets file or env var
-def _load_local_gcreds():
-    path = os.path.expanduser("~/.streamlit/secrets.toml")
-    if os.path.exists(path):
-        sec = toml.load(path)
-        if "GCREDS" in sec:
-            return sec["GCREDS"]
-        if "gcreds" in sec:
-            return sec["gcreds"]
-    if "GCREDS" in os.environ:
-        return os.environ["GCREDS"]
-    if "gcreds" in os.environ:
-        return os.environ["gcreds"]
-    return None
-
-if gcreds is None:
-    gcreds = _load_local_gcreds()
-
-if gcreds is None:
-    st.error("❌ GCREDS not found. Cannot load data.")
+# Load credentials from Streamlit secrets
+gcreds = st.secrets.get("gcreds") or st.secrets.get("GCREDS")
+if not gcreds:
+    st.error("❌ Google service account credentials not found in Streamlit secrets.")
     st.stop()
-
-# If gcreds is JSON string, parse to dict
+# If string, parse JSON
 if isinstance(gcreds, str):
     try:
         gcreds = json.loads(gcreds)
     except json.JSONDecodeError:
-        st.error("❌ GCREDS is not valid JSON.")
+        st.error("❌ GCREDS in secrets is not valid JSON.")
         st.stop()
 
-# Authorize gspread
+# Authorize and open sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 gc = gspread.authorize(creds)
 wb = gc.open("ZerodhaTokenStore")
 # Read worksheets
-log_ws = wb.worksheet("GreeksLog")
-open_ws = wb.worksheet("GreeksOpen")
-df_log = pd.DataFrame(log_ws.get_all_records())
-df_open = pd.DataFrame(open_ws.get_all_records())
+df_log = pd.DataFrame(wb.worksheet("GreeksLog").get_all_records())
+df_open = pd.DataFrame(wb.worksheet("GreeksOpen").get_all_records())
 
 if df_log.empty or df_open.empty:
-    st.error("❌ No data found in Google Sheets. Please run the fetch script.")
+    st.error("❌ No data found in Google Sheets. Please run the fetch script once.")
     st.stop()
 
 # ----------------- TIMESTAMP CONVERSION -----------------
 try:
     df_log['timestamp'] = pd.to_datetime(df_log['timestamp']).dt.tz_localize('UTC').dt.tz_convert(ist)
-except Exception:
+except KeyError:
     df_log['timestamp'] = pd.to_datetime(df_log['timestamp'])
 open_vals = df_open.iloc[-1]
 
