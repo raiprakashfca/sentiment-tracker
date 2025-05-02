@@ -44,15 +44,27 @@ if os.path.exists(secrets_path):
         gcreds = sec.get("gcreds")
     elif isinstance(sec.get("GCREDS"), dict):
         gcreds = sec.get("GCREDS")
-# Fallback to environment variables (JSON string)
+# Fallback to environment variables
 if not gcreds:
     raw = os.environ.get("GCREDS") or os.environ.get("gcreds")
     if raw:
+        # Try JSON first
         try:
             gcreds = json.loads(raw)
         except json.JSONDecodeError:
-            raise RuntimeError("❌ GCREDS environment variable is not valid JSON.")
+            # Try parsing as TOML
+            try:
+                toml_data = toml.loads(raw)
+                # Extract service account dict
+                if isinstance(toml_data.get("gcreds"), dict):
+                    gcreds = toml_data.get("gcreds")
+                elif isinstance(toml_data.get("GCREDS"), dict):
+                    gcreds = toml_data.get("GCREDS")
+            except Exception:
+                pass
 # Final check
+if not gcreds:
+    raise RuntimeError("❌ GCREDS not found in Streamlit secrets TOML or environment variables.")
 if not gcreds:
     raise RuntimeError("❌ GCREDS not found in Streamlit secrets TOML or environment variables.")
 
