@@ -1,9 +1,11 @@
+# fetch_option_data.py
 import os
 import json
 import pandas as pd
 import datetime
-iimport pytz
+import pytz
 import toml
+import time
 import numpy as np
 from kiteconnect import KiteConnect
 from oauth2client.service_account import ServiceAccountCredentials
@@ -12,25 +14,25 @@ from scipy.stats import norm
 
 # -------------------- CONFIG --------------------
 ist = pytz.timezone("Asia/Kolkata")
-now = datetime.datetime.now(ist)
-log_file = "greeks_log_historical.csv"
-open_file = "greeks_open.csv"
+today_dt = datetime.datetime.now(ist)
 
-# Raw Greek headers
-RAW_HEADERS = ["timestamp","ce_delta","pe_delta","ce_vega","pe_vega","ce_theta","pe_theta"]
+# Holiday list for 2025 (add or update as needed)
+nse_holidays = [
+    datetime.date(2025,1,26), datetime.date(2025,2,26), datetime.date(2025,3,14),
+    datetime.date(2025,3,31), datetime.date(2025,4,10), datetime.date(2025,4,14),
+    datetime.date(2025,4,18), datetime.date(2025,5,1),  datetime.date(2025,8,15),
+    datetime.date(2025,8,27), datetime.date(2025,10,2), datetime.date(2025,10,21),
+    datetime.date(2025,10,22), datetime.date(2025,11,5), datetime.date(2025,12,25)
+]
+# Skip non-trading days
+if today_dt.weekday() >= 5 or today_dt.date() in nse_holidays:
+    print("❌ Market closed or holiday — exiting.")
+    exit(0)
 
-# -------------------- HELPERS --------------------
-def init_log():
-    base = {h:0.0 for h in RAW_HEADERS}
-    base["timestamp"] = now.isoformat()
-    pd.DataFrame([base]).to_csv(log_file,index=False)
-    print("⚠️ Initialized log with RAW_HEADERS and zeros.")
+# Determine if it's the open snapshot time
+is_open_snapshot = today_dt.strftime("%H:%M") == "09:15"
 
-if not os.path.exists(log_file):
-    init_log()
-
-# -------------------- MAIN --------------------
-# Load creds
+# -------------------- LOAD CREDENTIALS --------------------
 secrets_path = os.path.expanduser("~/.streamlit/secrets.toml")
 if os.path.exists(secrets_path):
     sec = toml.load(secrets_path)
@@ -38,82 +40,83 @@ if os.path.exists(secrets_path):
 elif "GCREDS" in os.environ:
     gcreds = json.loads(os.environ["GCREDS"])
 else:
-    raise RuntimeError("GCREDS not found.")
+    raise RuntimeError("❌ GCREDS not found in secrets.toml or environment.")
 
-creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds,["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"])
-client = gspread.authorize(creds)
-sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
+# Authorize Google Sheets
+gscope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, gscope)
+gc = gspread.authorize(creds)
+wb = gc.open("ZerodhaTokenStore")
+log_ws  = wb.worksheet("GreeksLog")
+open_ws = wb.worksheet("GreeksOpen")
 
-api_key = sheet.acell("A1").value.strip()
-access_token = sheet.acell("C1").value.strip()
+# Read API tokens from Sheet1
+cfg = wb.worksheet("Sheet1")
+api_key     = cfg.acell("A1").value.strip()
+access_token= cfg.acell("C1").value.strip()
+
+# Initialize Kite
+def kite_call(fn, *args, retries=3, delay=2, **kwargs):
+    for i in range(retries):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            print(f"⚠️ API error: {e} — retry {i+1}/{retries}")
+            time.sleep(delay)
+    raise RuntimeError("API call failed after retries.")
 
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
+# Validate token
+spot_data = kite_call(kite.ltp, ["NSE:NIFTY 50"]) 
+spot_price = spot_data.get("NSE:NIFTY 50",{}).get("last_price")
+if not spot_price:
+    raise RuntimeError("❌ Invalid API Key or Access Token.")
+print(f"✅ Validated token. Spot: {spot_price}")
 
-# Validate
-try:
-    sp = kite.ltp(["NSE:NIFTY 50"])["NSE:NIFTY 50"]["last_price"]
-    print(f"✅ Valid token. Spot: {sp}")
-except Exception as e:
-    print(f"❌ Token invalid: {e}")
-    exit(1)
+# Fetch instrument list once
+inst = pd.DataFrame(kite_call(kite.instruments, "NFO"))
+nifty_opts = inst[(inst["name"]=="NIFTY") & (inst["segment"]=="NFO-OPT")]
+# Determine nearest expiry
+today = today_dt.date()
+expiries = sorted(nifty_opts["expiry"].unique())
+nearest = next(e for e in expiries if pd.to_datetime(e).date()>=today)
+ce = nifty_opts[(nifty_opts["expiry"]==nearest)&(nifty_opts["instrument_type"]=="CE")]
+pe = nifty_opts[(nifty_opts["expiry"]==nearest)&(nifty_opts["instrument_type"]=="PE")]
 
-# Instruments
-inst = pd.DataFrame(kite.instruments("NFO"))
-opts = inst[(inst["name"]=="NIFTY") & (inst["segment"]=="NFO-OPT")]
+# Fetch LTPs
+ce_ltp = kite_call(kite.ltp, ce["instrument_token"].tolist())
+pe_ltp = kite_call(kite.ltp, pe["instrument_token"].tolist())
+ce["ltp"] = ce["instrument_token"].apply(lambda x: ce_ltp.get(str(x),{}).get("last_price",0))
+pe["ltp"] = pe["instrument_token"].apply(lambda x: pe_ltp.get(str(x),{}).get("last_price",0))
 
-# Expiry
-today = datetime.date.today()
-exp = sorted(opts["expiry"].unique())
-ne = next(e for e in exp if pd.to_datetime(e).date()>=today)
-ce = opts[(opts["expiry"]==ne)&(opts["instrument_type"]=="CE")]
-pe = opts[(opts["expiry"]==ne)&(opts["instrument_type"]=="PE")]
-
-# Greeks raw calc
-T, r, iv = 1/12, 0.06, 0.14
-ce_ltp = kite.ltp(ce["instrument_token"].tolist())
-pe_ltp = kite.ltp(pe["instrument_token"].tolist())
-ce["ltp"] = ce["instrument_token"].apply(lambda x: ce_ltp[str(x)]["last_price"])
-pe["ltp"] = pe["instrument_token"].apply(lambda x: pe_ltp[str(x)]["last_price"])
-
-# Black-Scholes
-def greeks_KS(row, S):
-    K=row["strike"]
-    d1=(np.log(S/K)+(r+0.5*iv**2)*T)/(iv*np.sqrt(T))
+# Black-Scholes Greeks
+T, r, sigma = 1/12, 0.06, 0.14
+def bs_greeks(row):
+    S, K = spot_price, row["strike"]
+    d1 = (np.log(S/K)+(r+0.5*sigma**2)*T)/(sigma*np.sqrt(T))
     delta = norm.cdf(d1) if row["instrument_type"]=="CE" else -norm.cdf(-d1)
     vega = S*norm.pdf(d1)*np.sqrt(T)/100
-    theta = -S*norm.pdf(d1)*iv/(2*np.sqrt(T))/365
-    return pd.Series([delta,vega,theta])
+    theta= -S*norm.pdf(d1)*sigma/(2*np.sqrt(T))/365
+    return delta, vega, theta
+ce[["delta","vega","theta"]] = ce.apply(bs_greeks,axis=1, result_type="expand")
+pe[["delta","vega","theta"]] = pe.apply(bs_greeks,axis=1, result_type="expand")
 
-ce[["delta","vega","theta"]] = ce.apply(greeks_KS,axis=1,args=(sp,))
-pe[["delta","vega","theta"]] = pe.apply(greeks_KS,axis=1,args=(sp,))
+# Aggregate sums within delta range
+low,high = 0.05,0.6
+sum_ce = ce[(ce["delta"]>=low)&(ce["delta"]<=high)]["delta"].sum()
+sum_pe = pe[(pe["delta"].abs()>=low)&(pe["delta"].abs()<=high)]["delta"].sum()
+sum_cv = ce["vega"].sum(); sum_pv = pe["vega"].sum()
+sum_ct = ce["theta"].sum(); sum_pt = pe["theta"].sum()
 
-# Sum raw
-data = {
-    "timestamp":now.isoformat(),
-    "ce_delta":ce[(ce["delta"]>=0.05)&(ce["delta"]<=0.6)]["delta"].sum(),
-    "pe_delta":pe[(pe["delta"].abs()>=0.05)&(pe["delta"].abs()<=0.6)]["delta"].sum(),
-    "ce_vega":ce["vega"].sum(),
-    "pe_vega":pe["vega"].sum(),
-    "ce_theta":ce["theta"].sum(),
-    "pe_theta":pe["theta"].sum()
-}
-row=pd.DataFrame([data])
-
-# Append
-hdr = pd.read_csv(log_file,nrows=0).columns.tolist()
-if hdr!=RAW_HEADERS:
-    init_log()
-    hdr = RAW_HEADERS
-row.to_csv(log_file,mode='a',header=False,index=False)
-print("✅ Logged raw Greeks.")
-
-# Open snapshot
-if now.strftime("%H:%M")=="09:15":
-    s=row.rename(columns={
-        "ce_delta":"ce_delta_open","pe_delta":"pe_delta_open",
-        "ce_vega":"ce_vega_open","pe_vega":"pe_vega_open",
-        "ce_theta":"ce_theta_open","pe_theta":"pe_theta_open"
-    })
-    s.to_csv(open_file,index=False)
-    print("📌 Saved open snapshot.")
+# Prepare row
+row = [today_dt.isoformat(), sum_ce, sum_pe, sum_cv, sum_pv, sum_ct, sum_pt]
+# Append to GreeksLog
+log_ws.append_row(row)
+print("✅ Logged to Google Sheets (GreeksLog)")
+# Write open snapshot
+action = "📌 Open snapshot"
+if is_open_snapshot:
+    open_ws.clear()
+    open_ws.append_row(row)
+    print(action + " saved to GreeksOpen.")
