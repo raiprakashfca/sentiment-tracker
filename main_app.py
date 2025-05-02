@@ -38,7 +38,7 @@ Tracking both **CE** and **PE** separately.
 # ----------------- LOAD DATA -----------------
 try:
     df = pd.read_csv("greeks_log_historical.csv")
-    df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_localize(None)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
 except Exception as e:
     st.error(f"❌ Error loading greeks_log_historical.csv: {e}")
     st.stop()
@@ -67,12 +67,16 @@ def color_positive(val):
     return f'color: {color}'
 
 # ----------------- COMPUTE CHANGES -----------------
-df["ce_delta_change"] = df["ce_delta"] - open_vals["ce_delta_open"]
-df["pe_delta_change"] = df["pe_delta"] - open_vals["pe_delta_open"]
-df["ce_vega_change"] = df["ce_vega"] - open_vals["ce_vega_open"]
-df["pe_vega_change"] = df["pe_vega"] - open_vals["pe_vega_open"]
-df["ce_theta_change"] = df["ce_theta"] - open_vals["ce_theta_open"]
-df["pe_theta_change"] = df["pe_theta"] - open_vals["pe_theta_open"]
+try:
+    df["ce_delta_change"] = df["ce_delta"] - open_vals["ce_delta_open"]
+    df["pe_delta_change"] = df["pe_delta"] - open_vals["pe_delta_open"]
+    df["ce_vega_change"] = df["ce_vega"] - open_vals["ce_vega_open"]
+    df["pe_vega_change"] = df["pe_vega"] - open_vals["pe_vega_open"]
+    df["ce_theta_change"] = df["ce_theta"] - open_vals["ce_theta_open"]
+    df["pe_theta_change"] = df["pe_theta"] - open_vals["pe_theta_open"]
+except KeyError as e:
+    st.error("❌ Required columns not found in open snapshot. Please verify greeks_open.csv format.")
+    st.stop()
 
 # ----------------- DISPLAY TABLE -----------------
 st.subheader("📊 Live Greek Changes (vs 9:15 AM IST)")
