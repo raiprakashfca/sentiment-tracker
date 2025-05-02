@@ -40,34 +40,47 @@ Tracking both **CE** and **PE** separately.
 """)
 
 # ----------------- LOAD GOOGLE SHEET DATA -----------------
-# Load GCREDS from Streamlit secrets or fallback to file/env
-if "GCREDS" in st.secrets:
-    gcreds = json.loads(st.secrets["GCREDS"])
+# Attempt to load GCREDS from Streamlit secrets, fallback to file or env var
+gcreds = None
+if hasattr(st, "secrets") and "GCREDS" in st.secrets:
+    gcreds = st.secrets["GCREDS"]
 else:
     secrets_path = os.path.expanduser("~/.streamlit/secrets.toml")
     if os.path.exists(secrets_path):
         sec = toml.load(secrets_path)
-        gcreds = json.loads(sec.get("GCREDS", "{}"))
+        if "GCREDS" in sec:
+            gcreds = sec["GCREDS"]
     elif "GCREDS" in os.environ:
-        gcreds = json.loads(os.environ["GCREDS"])
-    else:
-        st.error("❌ GCREDS not found. Cannot load data.")
+        gcreds = os.environ["GCREDS"]
+
+if gcreds is None:
+    st.error("❌ GCREDS not found. Cannot load data.")
+    st.stop()
+
+# If gcreds is JSON string, parse to dict
+if isinstance(gcreds, str):
+    try:
+        gcreds = json.loads(gcreds)
+    except json.JSONDecodeError:
+        st.error("❌ GCREDS is not valid JSON.")
         st.stop()
 
 # Authorize gspread
-scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 gc = gspread.authorize(creds)
 wb = gc.open("ZerodhaTokenStore")
 # Read worksheets
-df_log  = pd.DataFrame(wb.worksheet("GreeksLog").get_all_records())
-df_open = pd.DataFrame(wb.worksheet("GreeksOpen").get_all_records())
+log_ws = wb.worksheet("GreeksLog")
+open_ws = wb.worksheet("GreeksOpen")
+df_log = pd.DataFrame(log_ws.get_all_records())
+df_open = pd.DataFrame(open_ws.get_all_records())
 
 if df_log.empty or df_open.empty:
     st.error("❌ No data found in Google Sheets. Please run the fetch script.")
     st.stop()
 
-# ----------------- CONVERT TIMESTAMPS -----------------
+# ----------------- TIMESTAMP CONVERSION -----------------
 try:
     df_log['timestamp'] = pd.to_datetime(df_log['timestamp']).dt.tz_localize('UTC').dt.tz_convert(ist)
 except Exception:
