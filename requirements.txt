@@ -5,3 +5,6 @@ gspread
 oauth2client
 pytz
 streamlit-autorefresh
+numpy
+scipy
+toml
