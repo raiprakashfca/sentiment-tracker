@@ -1,125 +1,113 @@
-import os
-import json
+import streamlit as st
 import pandas as pd
 import datetime
 import pytz
-from kiteconnect import KiteConnect
-from oauth2client.service_account import ServiceAccountCredentials
-import gspread
-import numpy as np
-from scipy.stats import norm
-import toml
 
-# -------------------- TIME --------------------
+# ----------------- PAGE SETUP -----------------
+st.set_page_config(page_title="📈 Sentiment Tracker", layout="wide")
+
+# ----------------- TIMEZONE SETUP -----------------
 ist = pytz.timezone("Asia/Kolkata")
 now = datetime.datetime.now(ist)
 
-# -------------------- GCREDS --------------------
-if os.path.exists(".streamlit/secrets.toml"):
-    secrets = toml.load(".streamlit/secrets.toml")
-    gcreds = json.loads(secrets["GCREDS"])
-else:
-    gcreds = json.loads(os.environ["GCREDS"])
+# ----------------- HEADER -----------------
+col1, col2 = st.columns([8, 2])
+with col1:
+    st.title("📈 Option Greeks Sentiment Tracker")
+    st.markdown(f"**🗓️ {now.strftime('%A, %d %B %Y, %I:%M:%S %p IST')}**")
+with col2:
+    st.metric(label="🕒 Market Time (IST)", value=now.strftime("%H:%M:%S"))
 
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
-client = gspread.authorize(creds)
-sheet = client.open("ZerodhaTokenStore").worksheet("Sheet1")
+# ----------------- EXPLANATION -----------------
+st.markdown("""
+This dashboard tracks the *real-time change* in:
+- Delta
+- Vega
+- Theta
+for NIFTY Options (0.05 to 0.60 Delta Range).
 
-api_key = sheet.acell("A1").value.strip()
-access_token = sheet.acell("C1").value.strip()
+**Interpretation:**
+- Positive Delta Change → Bullish Bias
+- Negative Delta Change → Bearish Bias
+- Rising Vega → Volatility Expansion
+- Rising Theta → Faster Premium Decay
 
-# -------------------- INIT KITE --------------------
-kite = KiteConnect(api_key=api_key)
-kite.set_access_token(access_token)
+Tracking both **CE** and **PE** separately.
+""")
 
-# -------------------- TOKEN TEST --------------------
+# ----------------- LOAD DATA -----------------
 try:
-    spot_price = kite.ltp(["NSE:NIFTY 50"])["NSE:NIFTY 50"]["last_price"]
-    print(f"✅ Valid token. Spot: {spot_price}")
+    df = pd.read_csv("greeks_log_historical.csv")
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
 except Exception as e:
-    print(f"❌ Invalid API Key or Access Token: {e}")
-    exit(1)
+    st.error(f"❌ Error loading greeks_log_historical.csv: {e}")
+    st.stop()
 
-# -------------------- LOAD INSTRUMENTS --------------------
-print("🔄 Loading instrument list...")
-instruments = pd.DataFrame(kite.instruments("NFO"))
-nifty_opts = instruments[(instruments["name"] == "NIFTY") & (instruments["segment"] == "NFO-OPT")]
+try:
+    open_vals = pd.read_csv("greeks_open.csv").iloc[0]
+except Exception as e:
+    st.error(f"❌ Error loading greeks_open.csv: {e}")
+    st.stop()
 
-# -------------------- SELECT EXPIRY --------------------
-today = datetime.date.today()
-future_expiries = sorted(nifty_opts["expiry"].unique())
-nearest_expiry = next(e for e in future_expiries if pd.to_datetime(e).date() >= today)
-print(f"🎯 Nearest expiry: {nearest_expiry}")
+required_cols = ["ce_delta", "pe_delta", "ce_vega", "pe_vega", "ce_theta", "pe_theta"]
+if not all(col in df.columns for col in required_cols):
+    st.error("❌ Required columns not found in data. Please check if fetch_option_data.py has populated data correctly.")
+    st.stop()
 
-# -------------------- FILTER OPTIONS --------------------
-ce_opts = nifty_opts[(nifty_opts["expiry"] == nearest_expiry) & (nifty_opts["instrument_type"] == "CE")]
-pe_opts = nifty_opts[(nifty_opts["expiry"] == nearest_expiry) & (nifty_opts["instrument_type"] == "PE")]
+# ----------------- MARKET STATUS -----------------
+market_open_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
+market_close_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
 
-# -------------------- CALCULATE DELTA RANGE --------------------
-def black_scholes_delta(option_type, S, K, T, r, sigma):
-    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-    return norm.cdf(d1) if option_type == "CE" else -norm.cdf(-d1)
+if not (market_open_time <= now <= market_close_time):
+    st.warning("🏁 **Market Closed for the Day**\n\n✅ Showing last trading snapshot.")
 
-def get_greeks(row, S, T, r, sigma):
-    K = row["strike"]
-    option_type = row["instrument_type"]
-    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-    d2 = d1 - sigma * np.sqrt(T)
-    delta = black_scholes_delta(option_type, S, K, T, r, sigma)
-    vega = S * norm.pdf(d1) * np.sqrt(T) / 100
-    theta = (-S * norm.pdf(d1) * sigma / (2 * np.sqrt(T))) / 365
-    return pd.Series([delta, vega, theta])
+# ----------------- COLOR CODING -----------------
+def color_positive(val):
+    color = 'green' if val > 0 else 'red' if val < 0 else 'black'
+    return f'color: {color}'
 
-# -------------------- MARKET SETTINGS --------------------
-T = 1 / 12
-r = 0.06
-iv = 0.14
+# ----------------- COMPUTE CHANGES -----------------
+try:
+    df["ce_delta_change"] = df["ce_delta"] - open_vals["ce_delta_open"]
+    df["pe_delta_change"] = df["pe_delta"] - open_vals["pe_delta_open"]
+    df["ce_vega_change"] = df["ce_vega"] - open_vals["ce_vega_open"]
+    df["pe_vega_change"] = df["pe_vega"] - open_vals["pe_vega_open"]
+    df["ce_theta_change"] = df["ce_theta"] - open_vals["ce_theta_open"]
+    df["pe_theta_change"] = df["pe_theta"] - open_vals["pe_theta_open"]
+except KeyError as e:
+    st.error("❌ Required columns not found in open snapshot. Please verify greeks_open.csv format.")
+    st.stop()
 
-# -------------------- LTP FETCH --------------------
-print("📡 Fetching option prices...")
-ce_ltp = kite.ltp(ce_opts["instrument_token"].astype(int).tolist())
-pe_ltp = kite.ltp(pe_opts["instrument_token"].astype(int).tolist())
+# ----------------- DISPLAY TABLE -----------------
+st.subheader("📊 Live Greek Changes (vs 9:15 AM IST)")
+st.dataframe(
+    df.style.applymap(color_positive, subset=[
+        "ce_delta_change", "pe_delta_change",
+        "ce_vega_change", "pe_vega_change",
+        "ce_theta_change", "pe_theta_change"
+    ]).format({
+        "ce_delta_change": "{:.2f}",
+        "pe_delta_change": "{:.2f}",
+        "ce_vega_change": "{:.2f}",
+        "pe_vega_change": "{:.2f}",
+        "ce_theta_change": "{:.2f}",
+        "pe_theta_change": "{:.2f}"
+    })
+)
 
-ce_opts["ltp"] = ce_opts["instrument_token"].apply(lambda x: ce_ltp[str(x)]["last_price"])
-pe_opts["ltp"] = pe_opts["instrument_token"].apply(lambda x: pe_ltp[str(x)]["last_price"])
+# ----------------- LAST REFRESH TIME -----------------
+st.caption(f"✅ Last updated at: {now.strftime('%d-%b-%Y %I:%M:%S %p IST')}")
 
-# -------------------- APPLY GREEKS --------------------
-ce_opts[["delta", "vega", "theta"]] = ce_opts.apply(get_greeks, axis=1, args=(spot_price, T, r, iv))
-pe_opts[["delta", "vega", "theta"]] = pe_opts.apply(get_greeks, axis=1, args=(spot_price, T, r, iv))
+# ----------------- AUTO REFRESH -----------------
+from streamlit_autorefresh import st_autorefresh
+st.caption("🔄 Auto-refreshes every 1 minute")
+st_autorefresh(interval=60000)
 
-# -------------------- FILTER BY DELTA RANGE --------------------
-ce_filtered = ce_opts[(ce_opts["delta"] >= 0.05) & (ce_opts["delta"] <= 0.6)]
-pe_filtered = pe_opts[(pe_opts["delta"].abs() >= 0.05) & (pe_opts["delta"].abs() <= 0.6)]
-
-# -------------------- SUM GREEKS --------------------
-timestamp = now.strftime("%Y-%m-%d %H:%M:%S%z")
-data = {
-    "timestamp": timestamp,
-    "ce_delta": ce_filtered["delta"].sum(),
-    "pe_delta": pe_filtered["delta"].sum(),
-    "ce_vega": ce_filtered["vega"].sum(),
-    "pe_vega": pe_filtered["vega"].sum(),
-    "ce_theta": ce_filtered["theta"].sum(),
-    "pe_theta": pe_filtered["theta"].sum()
-}
-print(f"✅ Greeks logged at {timestamp}")
-
-# -------------------- SAVE TO CSV --------------------
-row = pd.DataFrame([data])
-if not os.path.exists("greeks_log_historical.csv"):
-    row.to_csv("greeks_log_historical.csv", index=False)
-else:
-    row.to_csv("greeks_log_historical.csv", mode='a', header=False, index=False)
-
-# Save open snapshot if not already saved today
-open_snapshot_path = "greeks_open.csv"
-if not os.path.exists(open_snapshot_path):
-    print("📥 Saving open snapshot as it does not exist.")
-    row.rename(columns={
-        "ce_delta": "ce_delta_open", "pe_delta": "pe_delta_open",
-        "ce_vega": "ce_vega_open", "pe_vega": "pe_vega_open",
-        "ce_theta": "ce_theta_open", "pe_theta": "pe_theta_open"
-    }).to_csv(open_snapshot_path, index=False)
-else:
-    print("📁 Open snapshot already exists. Skipping.")
+# ----------------- FOOTER -----------------
+st.markdown("""---""")
+st.markdown(
+    "<div style='text-align: center; color: grey;'>"
+    "Made with ❤️ by Prakash Rai in partnership with ChatGPT | Powered by Zerodha APIs"
+    "</div>",
+    unsafe_allow_html=True
+)
