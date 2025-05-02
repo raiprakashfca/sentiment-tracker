@@ -3,12 +3,12 @@ import json
 import pandas as pd
 import datetime
 import pytz
+import toml
+import numpy as np
 from kiteconnect import KiteConnect
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread
-import numpy as np
 from scipy.stats import norm
-import toml
 
 # -------------------- TIME --------------------
 ist = pytz.timezone("Asia/Kolkata")
@@ -87,6 +87,7 @@ pe_ltp = kite.ltp(pe_opts["instrument_token"].tolist())
 ce_opts["ltp"] = ce_opts["instrument_token"].apply(lambda x: ce_ltp[str(x)]["last_price"])
 pe_opts["ltp"] = pe_opts["instrument_token"].apply(lambda x: pe_ltp[str(x)]["last_price"])
 
+# Compute Greeks
 ce_opts[["delta","vega","theta"]] = ce_opts.apply(get_greeks, axis=1, args=(spot_price, T, r, iv))
 pe_opts[["delta","vega","theta"]] = pe_opts.apply(get_greeks, axis=1, args=(spot_price, T, r, iv))
 
@@ -94,7 +95,7 @@ pe_opts[["delta","vega","theta"]] = pe_opts.apply(get_greeks, axis=1, args=(spot
 ce_filtered = ce_opts[(ce_opts["delta"] >= 0.05) & (ce_opts["delta"] <= 0.6)]
 pe_filtered = pe_opts[(pe_opts["delta"].abs() >= 0.05) & (pe_opts["delta"].abs() <= 0.6)]
 
-# Aggregate sums
+# -------------------- PREPARE ROW --------------------
 data = {
     "timestamp": now.isoformat(),
     "ce_delta": ce_filtered["delta"].sum(),
@@ -110,11 +111,11 @@ row = pd.DataFrame([data])
 log_file = "greeks_log_historical.csv"
 headers = ["timestamp","ce_delta","pe_delta","ce_vega","pe_vega","ce_theta","pe_theta"]
 
+# Write or append
 if not os.path.exists(log_file):
     row.to_csv(log_file, index=False)
     print("🆕 Created new greeks_log_historical.csv with headers.")
 else:
-    # read existing header
     with open(log_file, 'r') as f:
         existing = f.readline().strip().split(',')
     if not all(col in existing for col in headers):
@@ -124,13 +125,21 @@ else:
         row.to_csv(log_file, mode='a', header=False, index=False)
         print("✅ Appended row to greeks_log_historical.csv.")
 
-# Save open snapshot if first run of day
+# Post-save validation
+temp = pd.read_csv(log_file)
+missing = set(headers) - set(temp.columns)
+if missing:
+    print(f"⚠️ Missing columns after write: {missing}. Reinitializing file.")
+    temp.to_csv(log_file, columns=headers, index=False)
+    print("🔄 File headers corrected.")
+
+# -------------------- SAVE OPEN SNAPSHOT --------------------
 open_file = "greeks_open.csv"
 if now.strftime("%H:%M") == "09:15":
-    row_renamed = row.rename(columns={
+    open_row = row.rename(columns={
         "ce_delta": "ce_delta_open","pe_delta": "pe_delta_open",
         "ce_vega": "ce_vega_open","pe_vega": "pe_vega_open",
         "ce_theta": "ce_theta_open","pe_theta": "pe_theta_open"
     })
-    row_renamed.to_csv(open_file, index=False)
+    open_row.to_csv(open_file, index=False)
     print("📌 Market open snapshot saved.")
