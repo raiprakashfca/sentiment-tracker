@@ -8,7 +8,8 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from streamlit_autorefresh import st_autorefresh
-
+st.write("🔍 st.secrets keys:", list(st.secrets.keys()))
+st.stop()
 # ----------------- PAGE SETUP -----------------
 st.set_page_config(page_title="📈 Sentiment Tracker", layout="wide")
 ist = pytz.timezone("Asia/Kolkata")
