@@ -2,8 +2,8 @@ name: 🔢 Fetch Option Greeks
 
 on:
   schedule:
-    # Every 5 minutes during Indian market hours (09:15–15:30 IST → UTC 4:45–10:00)
-    - cron:  '*/5 4-10 * * 1-5'
+    # IST 09:15–15:30 => UTC 4:45–10:00
+    - cron: '*/5 4-10 * * 1-5'
   workflow_dispatch:
 
 jobs:
@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TZ: Asia/Kolkata
-      # Pass your Google credentials directly as env
-      GCREDS: ${{ secrets.STREAMLIT_SECRETS }}
+      # Inject your service-account JSON directly here
+      GCREDS: ${{ secrets.GCREDS }}
 
     steps:
       - name: ⬇️ Checkout repo
@@ -25,10 +25,7 @@ jobs:
 
       - name: 📦 Install dependencies
         run: |
-          pip install pandas numpy scipy gspread oauth2client kiteconnect toml
+          pip install pandas numpy scipy gspread oauth2client kiteconnect
 
       - name: ⏳ Run Greek Logger
         run: python fetch_option_data.py
-
-      - name: ✅ Done
-        run: echo "Greeks successfully logged to Google Sheets"
