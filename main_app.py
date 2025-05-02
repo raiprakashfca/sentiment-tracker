@@ -8,8 +8,7 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from streamlit_autorefresh import st_autorefresh
-st.write("🔍 st.secrets keys:", list(st.secrets.keys()))
-st.stop()
+
 # ----------------- PAGE SETUP -----------------
 st.set_page_config(page_title="📈 Sentiment Tracker", layout="wide")
 ist = pytz.timezone("Asia/Kolkata")
@@ -41,18 +40,31 @@ Tracking both **CE** and **PE** separately.
 """)
 
 # ----------------- LOAD GOOGLE SHEET DATA -----------------
-# Attempt to load GCREDS from Streamlit secrets, fallback to file or env var
+# ----------------- LOAD GOOGLE SHEET DATA -----------------
+# Load GCREDS from Streamlit secrets, fallback to file or env var
 gcreds = None
-if hasattr(st, "secrets") and "GCREDS" in st.secrets:
-    gcreds = st.secrets["GCREDS"]
-else:
-    secrets_path = os.path.expanduser("~/.streamlit/secrets.toml")
-    if os.path.exists(secrets_path):
-        sec = toml.load(secrets_path)
+if hasattr(st, "secrets"):
+    if "GCREDS" in st.secrets:
+        gcreds = st.secrets["GCREDS"]
+    elif "gcreds" in st.secrets:
+        gcreds = st.secrets["gcreds"]
+# fallback to local secrets file or env var
+def _load_local_gcreds():
+    path = os.path.expanduser("~/.streamlit/secrets.toml")
+    if os.path.exists(path):
+        sec = toml.load(path)
         if "GCREDS" in sec:
-            gcreds = sec["GCREDS"]
-    elif "GCREDS" in os.environ:
-        gcreds = os.environ["GCREDS"]
+            return sec["GCREDS"]
+        if "gcreds" in sec:
+            return sec["gcreds"]
+    if "GCREDS" in os.environ:
+        return os.environ["GCREDS"]
+    if "gcreds" in os.environ:
+        return os.environ["gcreds"]
+    return None
+
+if gcreds is None:
+    gcreds = _load_local_gcreds()
 
 if gcreds is None:
     st.error("❌ GCREDS not found. Cannot load data.")
