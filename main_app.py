@@ -2,11 +2,15 @@ import streamlit as st
 import pandas as pd
 import datetime
 import pytz
+import toml
+import os
+import json
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from streamlit_autorefresh import st_autorefresh
 
 # ----------------- PAGE SETUP -----------------
 st.set_page_config(page_title="📈 Sentiment Tracker", layout="wide")
-
-# ----------------- TIMEZONE SETUP -----------------
 ist = pytz.timezone("Asia/Kolkata")
 now = datetime.datetime.now(ist)
 
@@ -35,79 +39,78 @@ for NIFTY Options (0.05 to 0.60 Delta Range).
 Tracking both **CE** and **PE** separately.
 """)
 
-# ----------------- LOAD DATA -----------------
-try:
-    df = pd.read_csv("greeks_log_historical.csv")
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-except Exception as e:
-    st.error(f"❌ Error loading greeks_log_historical.csv: {e}")
+# ----------------- LOAD GOOGLE SHEET DATA -----------------
+# Load credentials
+secrets_path = os.path.expanduser("~/.streamlit/secrets.toml")
+if os.path.exists(secrets_path):
+    sec = toml.load(secrets_path)
+    gcreds = json.loads(sec.get("GCREDS", "{}"))
+elif "GCREDS" in os.environ:
+    gcreds = json.loads(os.environ["GCREDS"])
+else:
+    st.error("❌ GCREDS not found. Cannot load data.")
+    st.stop()
+# Authorize gspread
+scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
+gc = gspread.authorize(creds)
+wb = gc.open("ZerodhaTokenStore")
+# Read log and open snapshot sheets
+df_log = pd.DataFrame(wb.worksheet("GreeksLog").get_all_records())
+df_open = pd.DataFrame(wb.worksheet("GreeksOpen").get_all_records())
+
+if df_log.empty or df_open.empty:
+    st.error("❌ No data found in Google Sheets. Please run the fetch script.")
     st.stop()
 
+# Convert timestamp
 try:
-    open_vals = pd.read_csv("greeks_open.csv").iloc[0]
-except Exception as e:
-    st.error(f"❌ Error loading greeks_open.csv: {e}")
-    st.stop()
-
-required_cols = ["ce_delta", "pe_delta", "ce_vega", "pe_vega", "ce_theta", "pe_theta"]
-if not all(col in df.columns for col in required_cols):
-    st.error("❌ Required columns not found in data. Please check if fetch_option_data.py has populated data correctly.")
-    st.stop()
+    df_log['timestamp'] = pd.to_datetime(df_log['timestamp']).dt.tz_localize('UTC').dt.tz_convert(ist)
+except Exception:
+    df_log['timestamp'] = pd.to_datetime(df_log['timestamp'])
+open_vals = df_open.iloc[-1]
 
 # ----------------- MARKET STATUS -----------------
-market_open_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
-market_close_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
+market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
 
-if not (market_open_time <= now <= market_close_time):
-    st.warning("🏁 **Market Closed for the Day**\n\n✅ Showing last trading snapshot.")
+if not (market_open <= now <= market_close):
+    st.warning("🏁 **Market Closed** — Showing last trading snapshot.")
+
+# ----------------- CALCULATE CHANGES -----------------
+latest = df_log.iloc[-1]
+data = {
+    'ce_delta_change': latest['ce_delta'] - open_vals['ce_delta'],
+    'pe_delta_change': latest['pe_delta'] - open_vals['pe_delta'],
+    'ce_vega_change': latest['ce_vega'] - open_vals['ce_vega'],
+    'pe_vega_change': latest['pe_vega'] - open_vals['pe_vega'],
+    'ce_theta_change': latest['ce_theta'] - open_vals['ce_theta'],
+    'pe_theta_change': latest['pe_theta'] - open_vals['pe_theta']
+}
 
 # ----------------- COLOR CODING -----------------
-def color_positive(val):
-    color = 'green' if val > 0 else 'red' if val < 0 else 'black'
-    return f'color: {color}'
-
-# ----------------- COMPUTE CHANGES -----------------
-try:
-    df["ce_delta_change"] = df["ce_delta"] - open_vals["ce_delta_open"]
-    df["pe_delta_change"] = df["pe_delta"] - open_vals["pe_delta_open"]
-    df["ce_vega_change"] = df["ce_vega"] - open_vals["ce_vega_open"]
-    df["pe_vega_change"] = df["pe_vega"] - open_vals["pe_vega_open"]
-    df["ce_theta_change"] = df["ce_theta"] - open_vals["ce_theta_open"]
-    df["pe_theta_change"] = df["pe_theta"] - open_vals["pe_theta_open"]
-except KeyError as e:
-    st.error("❌ Required columns not found in open snapshot. Please verify greeks_open.csv format.")
-    st.stop()
+def color(val):
+    if val > 0:
+        return 'color: green'
+    elif val < 0:
+        return 'color: red'
+    return 'color: black'
 
 # ----------------- DISPLAY TABLE -----------------
 st.subheader("📊 Live Greek Changes (vs 9:15 AM IST)")
-st.dataframe(
-    df.style.applymap(color_positive, subset=[
-        "ce_delta_change", "pe_delta_change",
-        "ce_vega_change", "pe_vega_change",
-        "ce_theta_change", "pe_theta_change"
-    ]).format({
-        "ce_delta_change": "{:.2f}",
-        "pe_delta_change": "{:.2f}",
-        "ce_vega_change": "{:.2f}",
-        "pe_vega_change": "{:.2f}",
-        "ce_theta_change": "{:.2f}",
-        "pe_theta_change": "{:.2f}"
-    })
-)
+st.dataframe(pd.DataFrame([data]).style.applymap(color).format("{:.2f}"))
 
-# ----------------- LAST REFRESH TIME -----------------
+# ----------------- LAST REFRESH -----------------
 st.caption(f"✅ Last updated at: {now.strftime('%d-%b-%Y %I:%M:%S %p IST')}")
 
 # ----------------- AUTO REFRESH -----------------
-from streamlit_autorefresh import st_autorefresh
 st.caption("🔄 Auto-refreshes every 1 minute")
 st_autorefresh(interval=60000)
 
 # ----------------- FOOTER -----------------
 st.markdown("""---""")
 st.markdown(
-    "<div style='text-align: center; color: grey;'>"
+    "<div style='text-align:center;color:grey;'>"
     "Made with ❤️ by Prakash Rai in partnership with ChatGPT | Powered by Zerodha APIs"
-    "</div>",
-    unsafe_allow_html=True
+    "</div>", unsafe_allow_html=True
 )
