@@ -34,51 +34,31 @@ if today.weekday() >= 5 or today in nse_holidays:
 is_open_snapshot = now.strftime("%H:%M") == "09:15"
 
 # -------------------- LOAD CREDENTIALS --------------------
-# Attempt to load service account creds from Streamlit secrets TOML
-secrets_path = os.path.expanduser("~/.streamlit/secrets.toml")
-gcreds = None
-if os.path.exists(secrets_path):
-    sec = toml.load(secrets_path)
-    # sec['gcreds'] is a dict when stored as TOML table
-    if isinstance(sec.get("gcreds"), dict):
-        gcreds = sec.get("gcreds")
-    elif isinstance(sec.get("GCREDS"), dict):
-        gcreds = sec.get("GCREDS")
-# Fallback to environment variables
-if not gcreds:
-    raw = os.environ.get("GCREDS") or os.environ.get("gcreds")
-    if raw:
-        # Try JSON first
-        try:
-            gcreds = json.loads(raw)
-        except json.JSONDecodeError:
-            # Try parsing as TOML
-            try:
-                toml_data = toml.loads(raw)
-                # Extract service account dict
-                if isinstance(toml_data.get("gcreds"), dict):
-                    gcreds = toml_data.get("gcreds")
-                elif isinstance(toml_data.get("GCREDS"), dict):
-                    gcreds = toml_data.get("GCREDS")
-            except Exception:
-                pass
-# Final check
-if not gcreds:
-    raise RuntimeError("❌ GCREDS not found in Streamlit secrets TOML or environment variables.")
-if not gcreds:
-    raise RuntimeError("❌ GCREDS not found in Streamlit secrets TOML or environment variables.")
+import os, json
 
-# -------------------- GOOGLE SHEETS AUTH -------------------- --------------------
+# Expect full service-account JSON in the GCREDS env var
+gcreds_raw = os.environ.get("GCREDS") or os.environ.get("gcreds")
+if not gcreds_raw:
+    raise RuntimeError("❌ GCREDS not found in environment.")
+
+try:
+    gcreds = json.loads(gcreds_raw)
+except json.JSONDecodeError as e:
+    raise RuntimeError(f"❌ GCREDS is not valid JSON: {e}")
+
+# Authorize Google Sheets
+from oauth2client.service_account import ServiceAccountCredentials
+import gspread
+
 scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 gc = gspread.authorize(creds)
 wb = gc.open("ZerodhaTokenStore")
 log_ws  = wb.worksheet("GreeksLog")
 open_ws = wb.worksheet("GreeksOpen")
-# Read API tokens
-cfg = wb.worksheet("Sheet1")
-api_key = cfg.acell("A1").value.strip()
-access_token = cfg.acell("C1").value.strip()
+cfg     = wb.worksheet("Sheet1")
+api_key         = cfg.acell("A1").value.strip()
+access_token    = cfg.acell("C1").value.strip()
 
 # -------------------- KITE INITIALIZATION --------------------
 def kite_call(fn, *args, retries=3, delay=2, **kwargs):
