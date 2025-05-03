@@ -41,9 +41,10 @@ Tracking both **CE** and **PE** separately.
 """)
 
 # ----------------- LOAD GOOGLE SHEET SECRETS -----------------
-raw = st.secrets.get("GCREDS") or st.secrets.get("gcreds")
+# GCREDS can come from Streamlit secrets or env var
+raw = st.secrets.get("GCREDS") or os.environ.get("GCREDS") or os.environ.get("gcreds")
 if not raw:
-    st.error("❌ GCREDS not found. Cannot load data.")
+    st.error("❌ GCREDS not found in Streamlit secrets or environment variables.")
     st.stop()
 if isinstance(raw, str):
     try:
@@ -60,11 +61,19 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 gc = gspread.authorize(creds)
 
 # ----------------- FETCH DATA FROM SHEETS -----------------
-sheet_id = st.secrets.get("GREEKS_SHEET_ID")
+# Sheet ID can come from Streamlit secrets or env var
+sheet_id = st.secrets.get("GREEKS_SHEET_ID") or os.environ.get("GREEKS_SHEET_ID")
 if not sheet_id:
-    st.error("❌ GREEKS_SHEET_ID not found in secrets.")
+    st.error("❌ GREEKS_SHEET_ID not found in Streamlit secrets or environment variables.")
     st.stop()
-wb = gc.open_by_key(sheet_id)
+try:
+    wb = gc.open_by_key(sheet_id)
+except Exception as e:
+    st.error(f"❌ Cannot open sheet {sheet_id}: {e}")
+    st.stop()
+
+# Load records
+
 df_log = pd.DataFrame(wb.worksheet("GreeksLog").get_all_records())
 df_open = pd.DataFrame(wb.worksheet("GreeksOpen").get_all_records())
 if df_log.empty or df_open.empty:
@@ -74,7 +83,6 @@ if df_log.empty or df_open.empty:
 # ----------------- PROCESS DATA -----------------
 # Convert timestamps to IST
 df_log['timestamp'] = pd.to_datetime(df_log['timestamp'])
-# if UTC-localized, convert; else localize then convert
 try:
     df_log['timestamp'] = df_log['timestamp'].dt.tz_localize('UTC').dt.tz_convert(ist)
 except ValueError:
