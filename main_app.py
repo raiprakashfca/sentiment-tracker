@@ -89,7 +89,8 @@ try:
     ws_log = wb.worksheet("GreeksLog")
 except Exception as e:
     st.error(
-        "❌ Cannot access 'GreeksLog' tab: {}\n".format(e)
+        "❌ Cannot access 'GreeksLog' tab: {}
+".format(e)
         + "Make sure the sheet has a 'GreeksLog' worksheet and the service account has access."
     )
     st.stop()
@@ -97,31 +98,32 @@ try:
     ws_open = wb.worksheet("GreeksOpen")
 except Exception as e:
     st.error(
-        "❌ Cannot access 'GreeksOpen' tab: {}\n".format(e)
+        "❌ Cannot access 'GreeksOpen' tab: {}
+".format(e)
         + "Make sure the sheet has a 'GreeksOpen' worksheet and the service account has access."
     )
     st.stop()
 
-# Fetch records safely (bypass unique-header error) (bypass unique-header error)
-try:
-    raw_log = ws_log.get_all_values()
-    headers = raw_log[0]
-    data = raw_log[1:]
-    df_log = pd.DataFrame(data, columns=headers)
-except Exception as e:
-    st.error(f"❌ Failed to read 'GreeksLog' data: {e}")
-    st.stop()
+# Fetch records safely (bypass unique-header error)
+raw_log = ws_log.get_all_values()
+headers = raw_log[0]
+data = raw_log[1:]
+df_log = pd.DataFrame(data, columns=headers)
 
-try:
-    raw_open = ws_open.get_all_values()
-    headers_o = raw_open[0]
-    data_o = raw_open[1:]
-    df_open = pd.DataFrame(data_o, columns=headers_o)
-except Exception as e:
-    st.error(f"❌ Failed to read 'GreeksOpen' data: {e}")
-    st.stop()
+# If sheet omitted header row (first row is data), enforce expected columns
+expected_cols = ["timestamp","ce_delta","pe_delta","ce_vega","pe_vega","ce_theta","pe_theta"]
+if "timestamp" not in df_log.columns:
+    df_log = pd.DataFrame(raw_log, columns=expected_cols)
+
+raw_open = ws_open.get_all_values()
+headers_o = raw_open[0]
+data_o = raw_open[1:]
+df_open = pd.DataFrame(data_o, columns=headers_o)
+if "ce_delta" not in df_open.columns:
+    df_open = pd.DataFrame(raw_open, columns=expected_cols)
 
 # If df_log has no rows, we cannot proceed
+
 def has_data(df):
     return not df.empty and len(df.columns) > 1
 
