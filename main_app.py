@@ -89,7 +89,8 @@ try:
     ws_log = wb.worksheet("GreeksLog")
 except Exception as e:
     st.error(
-        "❌ Cannot access 'GreeksLog' tab: {}\n".format(e)
+        "❌ Cannot access 'GreeksLog' tab: {}
+".format(e)
         + "Make sure the sheet has a 'GreeksLog' worksheet and the service account has access."
     )
     st.stop()
@@ -97,7 +98,8 @@ try:
     ws_open = wb.worksheet("GreeksOpen")
 except Exception as e:
     st.error(
-        "❌ Cannot access 'GreeksOpen' tab: {}\n".format(e)
+        "❌ Cannot access 'GreeksOpen' tab: {}
+".format(e)
         + "Make sure the sheet has a 'GreeksOpen' worksheet and the service account has access."
     )
     st.stop()
@@ -121,12 +123,34 @@ except Exception as e:
     st.error(f"❌ Failed to read 'GreeksOpen' data: {e}")
     st.stop()
 
-if df_log.empty or df_open.empty:
-    st.error("❌ No data found in Google Sheets. Please run the fetch scripts.")
+# If df_log has no rows, we cannot proceed
+def has_data(df):
+    return not df.empty and len(df.columns) > 1
+
+if not has_data(df_log):
+    st.error(
+        "❌ No data found in 'GreeksLog'. Please run the fetch workflows at least once "
+        "to populate the GreeksLog sheet."
+    )
     st.stop()
-    st.error("❌ No data found in Google Sheets. Please run the fetch scripts.")
-    st.stop()
-    st.error("❌ No data found in Google Sheets. Please run the fetch scripts.")
+
+# Use open snapshot if available, else fallback to first log entry
+if has_data(df_open):
+    open_vals = df_open.iloc[-1]
+else:
+    st.warning(
+        "⚠️ No open snapshot found in 'GreeksOpen'. "
+        "Using first record of GreeksLog as baseline."
+    )
+    open_vals = df_log.iloc[0]
+
+latest = df_log.iloc[-1]
+
+# ----------------- PROCESS DATA -----------------
+    st.error(
+        "❌ No data found in Google Sheets. Please run the fetch workflows at least once "
+        "to populate the GreeksLog and GreeksOpen sheets."
+    )
     st.stop()
 
 # ----------------- PROCESS DATA -----------------
