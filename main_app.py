@@ -97,16 +97,34 @@ df_log = get_df("GreeksLog", required=True)
 df_open = get_df("GreeksOpen", required=False)
 
 # ----------------- BASELINE SELECTION -----------------
+# Decide baseline values: use last open snapshot if available, else first log entry
+if not df_open.empty:
+    open_vals = df_open.iloc[-1]
+else:
+    st.warning("⚠️ No open snapshot found in 'GreeksOpen'. Using first record of 'GreeksLog' as baseline.")
+    open_vals = df_log.iloc[0]
+# Latest record
+today_rec = df_log.iloc[-1]
 
-def color_positive(val):
-    if val > 0:
-        return 'color: green'
-    elif val < 0:
-        return 'color: red'
-    else:
-        return 'color: black'
+# Compute changes for display
+changes = {}
+for side in ["ce", "pe"]:
+    for greek in ["delta", "vega", "theta"]:
+        key = f"{side}_{greek}"
+        latest_val = float(today_rec.get(key, 0))
+        open_val = float(open_vals.get(key, 0))
+        changes[f"{side.upper()} {greek.capitalize()} Δ"] = latest_val - open_val
+# Build display DataFrame
+df_disp = pd.DataFrame([changes])
 
 st.subheader("📊 Live Greek Changes (vs Open)")
+st.dataframe(
+    df_disp.style
+           .applymap(color_positive)
+           .format("{:.2f}")
+)
+
+# ----------------- FOOTER & AUTO-REFRESH -----------------("📊 Live Greek Changes (vs Open)")
 st.dataframe(
     df_disp.style
            .applymap(color_positive)
