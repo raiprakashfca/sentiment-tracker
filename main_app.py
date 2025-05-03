@@ -47,17 +47,15 @@ if raw is None:
     st.error("❌ GCREDS not found in Streamlit secrets or environment variables. Ensure 'gcreds' section is present in secrets.toml or GCREDS env var is set.")
     st.stop()
 # Determine type of raw and parse accordingly
-if isinstance(raw, dict):
-    gcreds = raw
-elif isinstance(raw, str):
+if isinstance(raw, str):
     try:
         gcreds = json.loads(raw)
     except Exception as e:
         st.error(f"❌ Failed to parse GCREDS JSON string: {e}")
         st.stop()
 else:
-    st.error(f"❌ GCREDS must be a dict or JSON-string, got {type(raw)}")
-    st.stop()
+    # raw is likely a Secrets AttrDict or dict-like
+    gcreds = raw
 
 # ----------------- GOOGLE SHEETS AUTH ----------------- -----------------
 scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
