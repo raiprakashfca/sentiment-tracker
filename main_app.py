@@ -63,11 +63,22 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 gc = gspread.authorize(creds)
 
 # ----------------- FETCH DATA FROM SHEETS -----------------
-# Sheet ID can come from Streamlit secrets or env var
-sheet_id = st.secrets.get("GREEKS_SHEET_ID") or os.environ.get("GREEKS_SHEET_ID")
+# Attempt to read GREEKS_SHEET_ID from multiple locations
+sheet_id = (
+    st.secrets.get("GREEKS_SHEET_ID")
+    or (st.secrets.get("gcreds") or {}).get("GREEKS_SHEET_ID")
+    or os.environ.get("GREEKS_SHEET_ID")
+    or os.environ.get("greeks_sheet_id")
+)
 if not sheet_id:
-    st.error("❌ GREEKS_SHEET_ID not found in Streamlit secrets or environment variables.")
+    st.error(
+        "❌ GREEKS_SHEET_ID not found.
+"
+        "Please add it under [gcreds] in secrets.toml with key GREEKS_SHEET_ID, "
+        "or as a top-level secret, or set env var GREEKS_SHEET_ID."
+    )
     st.stop()
+# open the workbook
 try:
     wb = gc.open_by_key(sheet_id)
 except Exception as e:
