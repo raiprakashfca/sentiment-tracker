@@ -82,11 +82,14 @@ try:
         continuous=False
     )
     df = pd.DataFrame(candles)
-    # convert to IST timezone
-    df['date'] = pd.to_datetime(df['date']).dt.tz_localize('UTC').dt.tz_convert(ist)
+        # convert to IST timezone safely
+    df['date'] = pd.to_datetime(df['date'])
+    try:
+        df['date'] = df['date'].dt.tz_localize('UTC').dt.tz_convert(ist)
+    except TypeError:
+        df['date'] = df['date'].dt.tz_convert(ist)
 
-    # Clear sheet and write headers
-    ohlc_ws.clear()
+    # Clear sheet and write headers()
     headers = ['date', 'open', 'high', 'low', 'close', 'volume']
     ohlc_ws.append_row(headers)
 
