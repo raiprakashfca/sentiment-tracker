@@ -89,8 +89,7 @@ try:
     ws_log = wb.worksheet("GreeksLog")
 except Exception as e:
     st.error(
-        "❌ Cannot access 'GreeksLog' tab: {}
-".format(e)
+        "❌ Cannot access 'GreeksLog' tab: {}\n".format(e)
         + "Make sure the sheet has a 'GreeksLog' worksheet and the service account has access."
     )
     st.stop()
@@ -98,8 +97,7 @@ try:
     ws_open = wb.worksheet("GreeksOpen")
 except Exception as e:
     st.error(
-        "❌ Cannot access 'GreeksOpen' tab: {}
-".format(e)
+        "❌ Cannot access 'GreeksOpen' tab: {}\n".format(e)
         + "Make sure the sheet has a 'GreeksOpen' worksheet and the service account has access."
     )
     st.stop()
