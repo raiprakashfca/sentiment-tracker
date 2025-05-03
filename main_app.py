@@ -84,11 +84,35 @@ except Exception as e:
     st.error(f"❌ Cannot open sheet {sheet_id}: {e}")
     st.stop()
 
-# Load records
+# Load worksheets with permission checks
+try:
+    ws_log = wb.worksheet("GreeksLog")
+except Exception as e:
+    st.error(f"❌ Cannot access 'GreeksLog' tab: {e}
+Make sure the sheet has a 'GreeksLog' worksheet and the service account has access.")
+    st.stop()
+try:
+    ws_open = wb.worksheet("GreeksOpen")
+except Exception as e:
+    st.error(f"❌ Cannot access 'GreeksOpen' tab: {e}
+Make sure the sheet has a 'GreeksOpen' worksheet and the service account has access.")
+    st.stop()
 
-df_log = pd.DataFrame(wb.worksheet("GreeksLog").get_all_records())
-df_open = pd.DataFrame(wb.worksheet("GreeksOpen").get_all_records())
+# Fetch records safely
+try:
+    df_log = pd.DataFrame(ws_log.get_all_records())
+except Exception as e:
+    st.error(f"❌ Failed to read 'GreeksLog' records: {e}")
+    st.stop()
+try:
+    df_open = pd.DataFrame(ws_open.get_all_records())
+except Exception as e:
+    st.error(f"❌ Failed to read 'GreeksOpen' records: {e}")
+    st.stop()
+
 if df_log.empty or df_open.empty:
+    st.error("❌ No data found in Google Sheets. Please run the fetch scripts.")
+    st.stop()
     st.error("❌ No data found in Google Sheets. Please run the fetch scripts.")
     st.stop()
 
