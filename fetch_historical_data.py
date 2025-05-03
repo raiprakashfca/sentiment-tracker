@@ -8,93 +8,97 @@ from kiteconnect import KiteConnect
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread
 
-def main():
-    # -------------------- CONFIG --------------------
-    ist = pytz.timezone("Asia/Kolkata")
-    now = datetime.datetime.now(ist)
-    today = now.date()
+# -------------------- LOAD CREDENTIALS --------------------
+raw = os.environ.get("GCREDS") or os.environ.get("gcreds")
+if not raw:
+    raise RuntimeError("❌ GCREDS not found in environment.")
+try:
+    gcreds = json.loads(raw)
+except json.JSONDecodeError as e:
+    raise RuntimeError(f"❌ GCREDS is not valid JSON: {e}")
 
-    # NSE Holidays for 2025 (update as needed)
-    nse_holidays = {
-        datetime.date(2025,1,26), datetime.date(2025,2,26), datetime.date(2025,3,14),
-        datetime.date(2025,3,31), datetime.date(2025,4,10), datetime.date(2025,4,14),
-        datetime.date(2025,4,18), datetime.date(2025,5,1),  datetime.date(2025,8,15),
-        datetime.date(2025,8,27), datetime.date(2025,10,2), datetime.date(2025,10,21),
-        datetime.date(2025,10,22), datetime.date(2025,11,5), datetime.date(2025,12,25)
-    }
-    # Skip weekends and holidays
-    if today.weekday() >= 5 or today in nse_holidays:
-        print("❌ Market closed or holiday. Exiting.")
-        return
+# -------------------- GOOGLE SHEETS AUTH --------------------
+scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive"
+]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
+gc = gspread.authorize(creds)
 
-    # -------------------- LOAD CREDENTIALS --------------------
-    raw = os.environ.get("GCREDS") or os.environ.get("gcreds")
-    if not raw:
-        raise RuntimeError("❌ GCREDS not found in environment.")
-    try:
-        gcreds = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"❌ GCREDS is not valid JSON: {e}")
+# Open token store and OHLCData sheets by ID
+token_wb = gc.open_by_key(os.environ["TOKEN_SHEET_ID"])
+data_wb  = gc.open_by_key(os.environ["OHLCS_SHEET_ID"])
 
-    # -------------------- GOOGLE SHEETS AUTH --------------------
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
-    gc = gspread.authorize(creds)
+# Read Zerodha API tokens
+cfg          = token_wb.worksheet("Sheet1")
+api_key      = cfg.acell("A1").value.strip()
+access_token = cfg.acell("C1").value.strip()
 
-    # Open token and OHLC data workbooks
-    token_wb = gc.open_by_key(os.environ["TOKEN_SHEET_ID"])
-    data_wb  = gc.open_by_key(os.environ["OHLCS_SHEET_ID"])
+# Prepare OHLC worksheet
+ohlc_ws = data_wb.worksheet("OHLC")
 
-    # Read API tokens
-    cfg = token_wb.worksheet("Sheet1")
-    api_key = cfg.acell("A1").value.strip()
-    access_token = cfg.acell("C1").value.strip()
+# -------------------- DETERMINE TARGET DAY --------------------
+ist   = pytz.timezone("Asia/Kolkata")
+now   = datetime.datetime.now(ist)
+today = now.date()
 
-    # Prepare OHLC worksheet
-    ohlc_ws = data_wb.worksheet("OHLC")
+# NSE Holidays for 2025
+nse_holidays = {
+    datetime.date(2025,1,26), datetime.date(2025,2,26), datetime.date(2025,3,14),
+    datetime.date(2025,3,31), datetime.date(2025,4,10), datetime.date(2025,4,14),
+    datetime.date(2025,4,18), datetime.date(2025,5,1),  datetime.date(2025,8,15),
+    datetime.date(2025,8,27), datetime.date(2025,10,2), datetime.date(2025,10,21),
+    datetime.date(2025,10,22), datetime.date(2025,11,5), datetime.date(2025,12,25)
+}
 
-    # -------------------- INIT KITE --------------------
-    kite = KiteConnect(api_key=api_key)
-    kite.set_access_token(access_token)
+def get_last_trading_day(d, holidays):
+    prev = d
+    while prev.weekday() >= 5 or prev in holidays:
+        prev -= datetime.timedelta(days=1)
+    return prev
 
-    # Determine last trading day
-    from kiteconnect import KiteException
-    def last_trading_day(ref_date):
-        d = ref_date - datetime.timedelta(days=1)
-        while d.weekday() >= 5 or d in nse_holidays:
-            d -= datetime.timedelta(days=1)
-        return d
+target_day = get_last_trading_day(today, nse_holidays)
+print(f"ℹ️ Fetching OHLC for {target_day}")
 
-    ltd = last_trading_day(today)
-    start = datetime.datetime.combine(ltd, datetime.time(9,15, tzinfo=ist))
-    end   = datetime.datetime.combine(ltd, datetime.time(15,30, tzinfo=ist))
+# Set time bounds for 5-min candles
+time_from = datetime.datetime.combine(
+    target_day, datetime.time(9,15), tzinfo=ist
+)
+time_to   = datetime.datetime.combine(
+    target_day, datetime.time(15,30), tzinfo=ist
+)
 
-    # -------------------- FETCH HISTORICAL OHLC DATA --------------------
-    try:
-        ohlc = kite.historical_data(
-            instrument_token=256265,
-            from_date=start,
-            to_date=end,
-            interval="5minute"
-        )
-        df = pd.DataFrame(ohlc)
-        # convert to IST timezone if needed
-        df['date'] = pd.to_datetime(df['date']).dt.tz_localize('UTC').dt.tz_convert(ist)
+# -------------------- INIT KITE --------------------
+kite = KiteConnect(api_key=api_key)
+kite.set_access_token(access_token)
 
-        # Clear existing sheet and set headers
-        ohlc_ws.clear()
-        headers = ['date', 'open', 'high', 'low', 'close', 'volume']
-        ohlc_ws.append_row(headers)
+# -------------------- FETCH HISTORICAL OHLC --------------------
+try:
+    candles = kite.historical_data(
+        instrument_token=256265,
+        from_date=time_from,
+        to_date=time_to,
+        interval="5minute",
+        continuous=False
+    )
+    df = pd.DataFrame(candles)
+    # convert to IST timezone
+    df['date'] = pd.to_datetime(df['date']).dt.tz_localize('UTC').dt.tz_convert(ist)
 
-        # Append all rows
-        rows = [
-            [row['date'].isoformat(), row['open'], row['high'], row['low'], row['close'], row['volume']]
-            for _, row in df.iterrows()
-        ]
-        ohlc_ws.append_rows(rows, value_input_option='USER_ENTERED')
-        print(f"✅ Retrieved and logged {len(df)} candles for {ltd}")
-    except Exception as e:
-        print(f"❌ Failed to fetch or log historical data: {e}")
+    # Clear sheet and write headers
+    ohlc_ws.clear()
+    headers = ['date', 'open', 'high', 'low', 'close', 'volume']
+    ohlc_ws.append_row(headers)
+
+    # Append all candle rows
+    rows = df[['date','open','high','low','close','volume']].apply(
+        lambda r: [r['date'].isoformat(), r['open'], r['high'], r['low'], r['close'], r['volume']],
+        axis=1
+    ).tolist()
+    ohlc_ws.append_rows(rows, value_input_option='USER_ENTERED')
+    print(f"✅ Logged {len(df)} OHLC candles to sheet")
+except Exception as e:
+    print(f"❌ Failed to fetch or log OHLC data: {e}")
 
 if __name__ == "__main__":
-    main()
+    pass
