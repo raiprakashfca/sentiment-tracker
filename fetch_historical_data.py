@@ -49,7 +49,13 @@ api_key = cfg.acell("A1").value.strip()
 access_token = cfg.acell("C1").value.strip()
 
 # Prepare OHLC worksheet
-otc_ws = data_wb.worksheet("OHLC")
+try:
+    ohlc_ws = data_wb.worksheet("OHLC")
+except Exception as e:
+    raise RuntimeError(
+        f"❌ Cannot access 'OHLC' tab: {e}\n"
+        f"Ensure a worksheet named 'OHLC' exists in the OHLCData sheet and the service account has Editor rights."
+    )
 
 # -------------------- DETERMINE TARGET DAY --------------------
 ist = pytz.timezone("Asia/Kolkata")
