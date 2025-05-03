@@ -1,39 +1,35 @@
-name: 🕒 Backfill NIFTY OHLC
+name: 📈 Fetch NIFTY OHLC
 
 on:
   schedule:
-    - cron: '15 10 * * 1-5'  # 3:45 PM IST (10:15 UTC) on weekdays
+    # Every 5 minutes during Indian market hours (09:15–15:30 IST → UTC 4:45–10:00)
+    - cron: '*/5 4-10 * * 1-5'
   workflow_dispatch:
 
 jobs:
-  backfill-ohlc:
+  fetch-ohlc:
     runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Kolkata
+      GCREDS:           ${{ secrets.GCREDS }}
+      TOKEN_SHEET_ID:   ${{ secrets.TOKEN_SHEET_ID }}
+      OHLCS_SHEET_ID:   ${{ secrets.OHLCS_SHEET_ID }}
 
     steps:
-      - name: ⬇️ Checkout repo
+      - name: ⬇️ Checkout repository
         uses: actions/checkout@v3
 
-      - name: 🐍 Set up Python
+      - name: 🤳 Set up Python 3.10
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
       - name: 📦 Install dependencies
         run: |
-          pip install pandas gspread oauth2client kiteconnect
+          pip install pandas numpy kiteconnect gspread oauth2client
 
-      - name: 🔐 Write Streamlit Secrets
-        run: |
-          mkdir -p ~/.streamlit
-          echo "$STREAMLIT_SECRETS" > ~/.streamlit/secrets.toml
-
-      - name: 🧠 Run Backfill Script
+      - name: ⏳ Run OHLC Fetcher
         run: python fetch_historical_data.py
 
-      - name: 💾 Commit & Push
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add nifty_ohlc.csv
-          git commit -m "📊 Update nifty_ohlc.csv [auto]" || echo "No changes to commit"
-          git push
+      - name: ✅ Completed
+        run: echo "OHLC data successfully logged to Google Sheets"
