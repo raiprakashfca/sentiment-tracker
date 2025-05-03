@@ -41,20 +41,23 @@ Tracking both **CE** and **PE** separately.
 """)
 
 # ----------------- LOAD GOOGLE SHEET SECRETS -----------------
-# GCREDS can come from Streamlit secrets (lowercase 'gcreds') or env var
+# GCREDS can come from Streamlit secrets (nested dict) or env var
 raw = st.secrets.get("gcreds") or st.secrets.get("GCREDS") or os.environ.get("GCREDS") or os.environ.get("gcreds")
-if not raw:
-    st.error("❌ GCREDS not found in Streamlit secrets or environment variables. Ensure you added under [gcreds] in .streamlit/secrets.toml or as ENV var.")
+if raw is None:
+    st.error("❌ GCREDS not found in Streamlit secrets or environment variables. Ensure 'gcreds' section is present in secrets.toml or GCREDS env var is set.")
     st.stop()
-# If raw is a dict (Streamlit secrets) use it directly, else parse JSON
+# Determine type of raw and parse accordingly
 if isinstance(raw, dict):
     gcreds = raw
-else:
+elif isinstance(raw, str):
     try:
         gcreds = json.loads(raw)
-    except json.JSONDecodeError as e:
-        st.error(f"❌ Invalid GCREDS JSON: {e}")
+    except Exception as e:
+        st.error(f"❌ Failed to parse GCREDS JSON string: {e}")
         st.stop()
+else:
+    st.error(f"❌ GCREDS must be a dict or JSON-string, got {type(raw)}")
+    st.stop()
 
 # ----------------- GOOGLE SHEETS AUTH ----------------- -----------------
 scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
