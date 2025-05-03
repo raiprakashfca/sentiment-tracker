@@ -72,8 +72,7 @@ sheet_id = (
 )
 if not sheet_id:
     st.error(
-        "❌ GREEKS_SHEET_ID not found.
-"
+        "❌ GREEKS_SHEET_ID not found.\n"
         "Please add it under [gcreds] in secrets.toml with key GREEKS_SHEET_ID, "
         "or as a top-level secret, or set env var GREEKS_SHEET_ID."
     )
