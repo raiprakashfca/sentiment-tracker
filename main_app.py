@@ -125,7 +125,7 @@ def color_positive(val):
     elif val < 0:
         return 'color: red'
     else:
-        return 'color: black'
+        return 'color: white'
 
 # ----------------- DISPLAY -----------------
 df_disp = pd.DataFrame([changes])
