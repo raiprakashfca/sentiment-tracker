@@ -26,16 +26,19 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 gc = gspread.authorize(creds)
 
 # Open token store and OHLCData sheets by ID
+service_account = gcreds.get("client_email", "<unknown>")
+print(f"🔐 Using service account: {service_account}")
 try:
     token_wb = gc.open_by_key(os.environ["TOKEN_SHEET_ID"])
 except Exception as e:
-    raise RuntimeError(f"❌ Cannot open TOKEN_SHEET_ID: {e}\nMake sure the service account has access and the ID is correct.")
+    raise RuntimeError(f"❌ Cannot open TOKEN_SHEET_ID: {e}
+Make sure the service account ({service_account}) has access and the ID is correct.")
 try:
     data_wb = gc.open_by_key(os.environ["OHLCS_SHEET_ID"])
 except Exception as e:
     raise RuntimeError(
-        f"❌ Cannot open OHLCS_SHEET_ID: {e}\n"
-        "Please share the 'OHLCData' sheet with your service account email."
+        f"❌ Cannot open OHLCS_SHEET_ID: {e}
+Please share the 'OHLCData' sheet with the service account email ({service_account})."
     )
 
 # Read Zerodha API tokens
