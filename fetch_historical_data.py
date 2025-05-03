@@ -31,27 +31,29 @@ print(f"🔐 Using service account: {service_account}")
 try:
     token_wb = gc.open_by_key(os.environ["TOKEN_SHEET_ID"])
 except Exception as e:
-    raise RuntimeError(f"❌ Cannot open TOKEN_SHEET_ID: {e}
-Make sure the service account ({service_account}) has access and the ID is correct.")
+    raise RuntimeError(
+        f"❌ Cannot open TOKEN_SHEET_ID: {e}\n"
+        f"Make sure the service account ({service_account}) has access and the ID is correct."
+    )
 try:
     data_wb = gc.open_by_key(os.environ["OHLCS_SHEET_ID"])
 except Exception as e:
     raise RuntimeError(
-        f"❌ Cannot open OHLCS_SHEET_ID: {e}
-Please share the 'OHLCData' sheet with the service account email ({service_account})."
+        f"❌ Cannot open OHLCS_SHEET_ID: {e}\n"
+        f"Please share the 'OHLCData' sheet with the service account email ({service_account})."
     )
 
 # Read Zerodha API tokens
-cfg          = token_wb.worksheet("Sheet1")
-api_key      = cfg.acell("A1").value.strip()
+cfg = token_wb.worksheet("Sheet1")
+api_key = cfg.acell("A1").value.strip()
 access_token = cfg.acell("C1").value.strip()
 
 # Prepare OHLC worksheet
-ohlc_ws = data_wb.worksheet("OHLC")
+otc_ws = data_wb.worksheet("OHLC")
 
 # -------------------- DETERMINE TARGET DAY --------------------
-ist   = pytz.timezone("Asia/Kolkata")
-now   = datetime.datetime.now(ist)
+ist = pytz.timezone("Asia/Kolkata")
+now = datetime.datetime.now(ist)
 today = now.date()
 
 # NSE Holidays for 2025
@@ -76,7 +78,7 @@ print(f"ℹ️ Fetching OHLC for {target_day}")
 time_from = datetime.datetime.combine(
     target_day, datetime.time(9,15), tzinfo=ist
 )
-time_to   = datetime.datetime.combine(
+time_to = datetime.datetime.combine(
     target_day, datetime.time(15,30), tzinfo=ist
 )
 
@@ -94,26 +96,38 @@ try:
         continuous=False
     )
     df = pd.DataFrame(candles)
-        # convert to IST timezone safely
+
+    # convert to IST timezone safely
     df['date'] = pd.to_datetime(df['date'])
     try:
         df['date'] = df['date'].dt.tz_localize('UTC').dt.tz_convert(ist)
     except TypeError:
         df['date'] = df['date'].dt.tz_convert(ist)
 
-    # Clear sheet and write headers()
-    headers = ['date', 'open', 'high', 'low', 'close', 'volume']
-    ohlc_ws.append_row(headers)
+    # Clear sheet and write headers
+    try:
+        ohlc_ws.clear()
+        headers = ['date', 'open', 'high', 'low', 'close', 'volume']
+        ohlc_ws.append_row(headers)
+    except Exception as e:
+        raise RuntimeError(
+            f"❌ Permission error writing headers: {e}\n"
+            f"Ensure the service account ({service_account}) has Editor rights on the OHLCData sheet and its 'OHLC' tab."
+        )
 
     # Append all candle rows
     rows = df[['date','open','high','low','close','volume']].apply(
         lambda r: [r['date'].isoformat(), r['open'], r['high'], r['low'], r['close'], r['volume']],
         axis=1
     ).tolist()
-    ohlc_ws.append_rows(rows, value_input_option='USER_ENTERED')
+    try:
+        ohlc_ws.append_rows(rows, value_input_option='USER_ENTERED')
+    except Exception as e:
+        raise RuntimeError(
+            f"❌ Permission error appending rows: {e}\n"
+            f"Ensure the service account ({service_account}) has Editor rights on the OHLCData sheet and its 'OHLC' tab."
+        )
+
     print(f"✅ Logged {len(df)} OHLC candles to sheet")
 except Exception as e:
     print(f"❌ Failed to fetch or log OHLC data: {e}")
-
-if __name__ == "__main__":
-    pass
