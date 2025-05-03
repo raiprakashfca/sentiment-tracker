@@ -102,19 +102,28 @@ except Exception as e:
     )
     st.stop()
 
-# Fetch records safely
+# Fetch records safely (bypass unique-header error)
 try:
-    df_log = pd.DataFrame(ws_log.get_all_records())
+    raw_log = ws_log.get_all_values()
+    headers = raw_log[0]
+    data = raw_log[1:]
+    df_log = pd.DataFrame(data, columns=headers)
 except Exception as e:
-    st.error(f"❌ Failed to read 'GreeksLog' records: {e}")
+    st.error(f"❌ Failed to read 'GreeksLog' data: {e}")
     st.stop()
+
 try:
-    df_open = pd.DataFrame(ws_open.get_all_records())
+    raw_open = ws_open.get_all_values()
+    headers_o = raw_open[0]
+    data_o = raw_open[1:]
+    df_open = pd.DataFrame(data_o, columns=headers_o)
 except Exception as e:
-    st.error(f"❌ Failed to read 'GreeksOpen' records: {e}")
+    st.error(f"❌ Failed to read 'GreeksOpen' data: {e}")
     st.stop()
 
 if df_log.empty or df_open.empty:
+    st.error("❌ No data found in Google Sheets. Please run the fetch scripts.")
+    st.stop()
     st.error("❌ No data found in Google Sheets. Please run the fetch scripts.")
     st.stop()
     st.error("❌ No data found in Google Sheets. Please run the fetch scripts.")
