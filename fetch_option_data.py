@@ -1,4 +1,3 @@
-# fetch_option_data.py
 import os
 import json
 import time
@@ -35,7 +34,7 @@ def get_last_trading_day(d, holidays):
 target_day = get_last_trading_day(today, nse_holidays)
 print(f"ℹ️ Using trading date: {target_day}")
 
-# Detect open snapshot (only at 09:15 IST on a trading day)
+# snapshot at open only
 is_open_snapshot = (now.strftime("%H:%M") == "09:15" and target_day == today)
 
 # -------------------- LOAD SERVICE-ACCOUNT CREDS --------------------
@@ -48,24 +47,35 @@ except json.JSONDecodeError as e:
     raise RuntimeError(f"❌ GCREDS is not valid JSON: {e}")
 
 # -------------------- GOOGLE SHEETS AUTH --------------------
-scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
+scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive"
+]
+service_account = gcreds.get("client_email", "<unknown>")
+print(f"🔐 Using service account: {service_account}")
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 gc = gspread.authorize(creds)
 
-# Open token store and Greeks data workbooks
-token_wb = gc.open_by_key(os.environ["TOKEN_SHEET_ID"])
-data_wb  = gc.open_by_key(os.environ["GREEKS_SHEET_ID"])
+# Open workbooks
+try:
+    token_wb = gc.open_by_key(os.environ["TOKEN_SHEET_ID"])
+except Exception as e:
+    raise RuntimeError(f"❌ Cannot open TOKEN_SHEET_ID: {e} - share with {service_account}")
+try:
+    data_wb = gc.open_by_key(os.environ["GREEKS_SHEET_ID"])
+except Exception as e:
+    raise RuntimeError(f"❌ Cannot open GREEKS_SHEET_ID: {e} - share with {service_account}")
 
-# Read Zerodha API tokens
-cfg           = token_wb.worksheet("Sheet1")
-api_key       = cfg.acell("A1").value.strip()
-access_token  = cfg.acell("C1").value.strip()
+# Read Zeodha tokens
+t_cfg = token_wb.worksheet("Sheet1")
+api_key = t_cfg.acell("A1").value.strip()
+access_token = t_cfg.acell("C1").value.strip()
 
 # Prepare worksheets
-log_ws, open_ws = data_wb.worksheet("GreeksLog"), data_wb.worksheet("GreeksOpen")
+log_ws = data_wb.worksheet("GreeksLog")
+open_ws = data_wb.worksheet("GreeksOpen")
 
 # -------------------- KITE INITIALIZATION & VALIDATION --------------------
-```python
 def kite_call(fn, *args, retries=3, delay=2, **kwargs):
     for i in range(retries):
         try:
@@ -77,8 +87,49 @@ def kite_call(fn, *args, retries=3, delay=2, **kwargs):
 
 kite = KiteConnect(api_key=api_key)
 kite.set_access_token(access_token)
-spot = kite_call(kite.ltp, ["NSE:NIFTY 50"])\
-.get("NSE:NIFTY 50", {}).get("last_price")
-if not spot:
+spot_data = kite_call(kite.ltp, ["NSE:NIFTY 50"])
+spot_price = spot_data.get("NSE:NIFTY 50", {}).get("last_price")
+if not spot_price:
     raise RuntimeError("❌ Invalid API Key or Access Token.")
-print(f"✅ Spot price: {spot}")
+print(f"✅ Spot price: {spot_price}")
+
+# -------------------- FETCH & COMPUTE GREEKS --------------------
+insts = pd.DataFrame(kite_call(kite.instruments, "NFO"))
+nifty = insts[(insts["name"]=="NIFTY") & (insts["segment"]=="NFO-OPT")]
+exp = sorted(nifty["expiry"].unique())
+ne = next(e for e in exp if pd.to_datetime(e).date() >= target_day)
+ce = nifty[(nifty["expiry"]==ne) & (nifty["instrument_type"]=="CE")]
+pe = nifty[(nifty["expiry"]==ne) & (nifty["instrument_type"]=="PE")]
+
+ce_ltp = kite_call(kite.ltp, ce["instrument_token"].astype(int).tolist())
+pe_ltp = kite_call(kite.ltp, pe["instrument_token"].astype(int).tolist())
+ce["ltp"] = ce["instrument_token"].apply(lambda x: ce_ltp.get(str(x), {}).get("last_price", 0))
+pe["ltp"] = pe["instrument_token"].apply(lambda x: pe_ltp.get(str(x), {}).get("last_price", 0))
+
+T, r, sigma = 1/12, 0.06, 0.14
+
+def bs_greeks(row):
+    S, K = spot_price, row["strike"]
+    d1 = (np.log(S/K) + (r + 0.5*sigma**2)*T) / (sigma*np.sqrt(T))
+    delta = norm.cdf(d1) if row["instrument_type"]=="CE" else -norm.cdf(-d1)
+    vega = S * norm.pdf(d1) * np.sqrt(T) / 100
+    theta = -S * norm.pdf(d1) * sigma / (2 * np.sqrt(T)) / 365
+    return delta, vega, theta
+
+ce[["delta","vega","theta"]] = ce.apply(bs_greeks, axis=1, result_type="expand")
+pe[["delta","vega","theta"]] = pe.apply(bs_greeks, axis=1, result_type="expand")
+
+low, high = 0.05, 0.6
+sum_ce = ce.query("delta>=@low and delta<=@high")["delta"].sum()
+sum_pe = pe.query("abs(delta)>=@low and abs(delta)<=@high")["delta"].sum()
+sum_cv = ce["vega"].sum(); sum_pv = pe["vega"].sum()
+sum_ct = ce["theta"].sum(); sum_pt = pe["theta"].sum()
+
+row = [now.isoformat(), sum_ce, sum_pe, sum_cv, sum_pv, sum_ct, sum_pt]
+log_ws.append_row(row)
+print("✅ Logged to GreeksLog")
+
+if is_open_snapshot:
+    open_ws.clear()
+    open_ws.append_row(row)
+    print("📌 Saved open snapshot to GreeksOpen")
