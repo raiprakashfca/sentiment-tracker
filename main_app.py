@@ -71,44 +71,32 @@ wb = open_sheet(sheet_id)
 def get_df(ws_name, required=True):
     try:
         ws = wb.worksheet(ws_name)
-        data = ws.get_all_records()
-        df = pd.DataFrame(data)
-        if df.empty and required:
-            raise ValueError(f"Worksheet '{ws_name}' is empty.")
-        return df
     except Exception as e:
         if required:
-            st.error(f"❌ Error loading '{ws_name}': {e}")
+            st.error(f"❌ Cannot access '{ws_name}' tab: {e}")
             st.stop()
         else:
-            st.warning(f"⚠️ '{ws_name}' missing or empty. {e}")
+            st.warning(f"⚠️ '{ws_name}' missing: {e}")
             return pd.DataFrame()
+    # Use get_all_values to handle non-unique headers
+    all_vals = ws.get_all_values()
+    if not all_vals or len(all_vals) < 2:
+        if required:
+            st.error(f"❌ '{ws_name}' is empty or missing rows.")
+            st.stop()
+        else:
+            return pd.DataFrame()
+    headers = all_vals[0]
+    rows = all_vals[1:]
+    df = pd.DataFrame(rows, columns=headers)
+    return df
 
-df_log  = get_df("GreeksLog",   required=True)
-df_open = get_df("GreeksOpen",  required=False)
+# Load data
+
+df_log = get_df("GreeksLog", required=True)
+df_open = get_df("GreeksOpen", required=False)
 
 # ----------------- BASELINE SELECTION -----------------
-if not df_open.empty and "ce_delta_open" in df_open.columns:
-    open_vals = df_open.iloc[-1]
-else:
-    open_vals = df_log.iloc[0]
-
-# Latest values
-today_rec = df_log.iloc[-1]
-
-# ----------------- COMPUTE CHANGES -----------------
-changes = {}
-for side in ["ce","pe"]:
-    for greek in ["delta","vega","theta"]:
-        key_latest = f"{side}_{greek}"
-        key_open   = f"{side}_{greek}_open"
-        latest_val = float(today_rec.get(key_latest, 0))
-        open_val   = float(open_vals.get(key_open, 0))
-        changes[f"{side.upper()} {greek.capitalize()} Δ"] = latest_val - open_val
-
-# ----------------- DISPLAY -----------------
-# Build a one-row DataFrame
-df_disp = pd.DataFrame([changes])
 
 def color_positive(val):
     if val > 0:
