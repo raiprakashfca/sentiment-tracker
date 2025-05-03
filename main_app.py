@@ -41,143 +41,91 @@ Tracking both **CE** and **PE** separately.
 """)
 
 # ----------------- LOAD GOOGLE SHEET SECRETS -----------------
-# GCREDS can come from Streamlit secrets (nested dict) or env var
-raw = st.secrets.get("gcreds") or st.secrets.get("GCREDS") or os.environ.get("GCREDS") or os.environ.get("gcreds")
-if raw is None:
-    st.error("❌ GCREDS not found in Streamlit secrets or environment variables. Ensure 'gcreds' section is present in secrets.toml or GCREDS env var is set.")
+# Load service-account creds from [gcreds] in secrets.toml
+gcreds = st.secrets.get("gcreds")
+if not gcreds:
+    st.error("❌ 'gcreds' not found in Streamlit secrets. Paste your service-account JSON under [gcreds].")
     st.stop()
-# Determine type of raw and parse accordingly
-if isinstance(raw, str):
-    try:
-        gcreds = json.loads(raw)
-    except Exception as e:
-        st.error(f"❌ Failed to parse GCREDS JSON string: {e}")
-        st.stop()
-else:
-    # raw is likely a Secrets AttrDict or dict-like
-    gcreds = raw
 
-# ----------------- GOOGLE SHEETS AUTH ----------------- -----------------
+# Load GreeksData sheet ID
+sheet_id = st.secrets.get("GREEKS_SHEET_ID")
+if not sheet_id:
+    st.error("❌ 'GREEKS_SHEET_ID' not found in Streamlit secrets. Add it as a top-level entry.")
+    st.stop()
+
+# ----------------- GOOGLE SHEETS AUTH -----------------
 scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 gc = gspread.authorize(creds)
 
-# ----------------- FETCH DATA FROM SHEETS -----------------
-# Attempt to read GREEKS_SHEET_ID from multiple locations
-sheet_id = (
-    st.secrets.get("GREEKS_SHEET_ID")
-    or (st.secrets.get("gcreds") or {}).get("GREEKS_SHEET_ID")
-    or os.environ.get("GREEKS_SHEET_ID")
-    or os.environ.get("greeks_sheet_id")
-)
-if not sheet_id:
-    st.error(
-        "❌ GREEKS_SHEET_ID not found.\n"
-        "Please add it under [gcreds] in secrets.toml with key GREEKS_SHEET_ID, "
-        "or as a top-level secret, or set env var GREEKS_SHEET_ID."
-    )
-    st.stop()
-# open the workbook
-try:
-    wb = gc.open_by_key(sheet_id)
-except Exception as e:
-    st.error(f"❌ Cannot open sheet {sheet_id}: {e}")
-    st.stop()
+# Open GreeksData workbook
+def open_sheet(key):
+    try:
+        return gc.open_by_key(key)
+    except Exception as e:
+        st.error(f"❌ Cannot open sheet {key}: {e}")
+        st.stop()
+wb = open_sheet(sheet_id)
 
-# Load worksheets with permission checks
-try:
-    ws_log = wb.worksheet("GreeksLog")
-except Exception as e:
-    st.error(
-        "❌ Cannot access 'GreeksLog' tab: {}\n".format(e)
-        + "Make sure the sheet has a 'GreeksLog' worksheet and the service account has access."
-    )
-    st.stop()
-try:
-    ws_open = wb.worksheet("GreeksOpen")
-except Exception as e:
-    st.error(
-        "❌ Cannot access 'GreeksOpen' tab: {}\n".format(e)
-        + "Make sure the sheet has a 'GreeksOpen' worksheet and the service account has access."
-    )
-    st.stop()
+# ----------------- LOAD WORKSHEETS -----------------
+def get_df(ws_name, required=True):
+    try:
+        ws = wb.worksheet(ws_name)
+        data = ws.get_all_records()
+        df = pd.DataFrame(data)
+        if df.empty and required:
+            raise ValueError(f"Worksheet '{ws_name}' is empty.")
+        return df
+    except Exception as e:
+        if required:
+            st.error(f"❌ Error loading '{ws_name}': {e}")
+            st.stop()
+        else:
+            st.warning(f"⚠️ '{ws_name}' missing or empty. {e}")
+            return pd.DataFrame()
 
-# Fetch records safely (bypass unique-header error)
-raw_log = ws_log.get_all_values()
-headers = raw_log[0]
-data = raw_log[1:]
-df_log = pd.DataFrame(data, columns=headers)
+df_log  = get_df("GreeksLog",   required=True)
+df_open = get_df("GreeksOpen",  required=False)
 
-# If sheet omitted header row (first row is data), enforce expected columns
-expected_cols = ["timestamp","ce_delta","pe_delta","ce_vega","pe_vega","ce_theta","pe_theta"]
-if "timestamp" not in df_log.columns:
-    df_log = pd.DataFrame(raw_log, columns=expected_cols)
-
-raw_open = ws_open.get_all_values()
-headers_o = raw_open[0]
-data_o = raw_open[1:]
-df_open = pd.DataFrame(data_o, columns=headers_o)
-if "ce_delta" not in df_open.columns:
-    df_open = pd.DataFrame(raw_open, columns=expected_cols)
-
-# If df_log has no rows, we cannot proceed
-
-def has_data(df):
-    return not df.empty and len(df.columns) > 1
-
-if not has_data(df_log):
-    st.error(
-        "❌ No data found in 'GreeksLog'. Please run the fetch workflows at least once "
-        "to populate the GreeksLog sheet."
-    )
-    st.stop()
-
-# Use open snapshot if available, else fallback to first log entry
-if has_data(df_open):
+# ----------------- BASELINE SELECTION -----------------
+if not df_open.empty and "ce_delta_open" in df_open.columns:
     open_vals = df_open.iloc[-1]
 else:
-    st.warning(
-        "⚠️ No open snapshot found in 'GreeksOpen'. "
-        "Using first record of GreeksLog as baseline."
-    )
     open_vals = df_log.iloc[0]
 
-latest = df_log.iloc[-1]
+# Latest values
+today_rec = df_log.iloc[-1]
 
-# ----------------- PROCESS DATA -----------------
-# Convert timestamps to IST
-df_log['timestamp'] = pd.to_datetime(df_log['timestamp'])
-try:
-    df_log['timestamp'] = df_log['timestamp'].dt.tz_localize('UTC').dt.tz_convert(ist)
-except ValueError:
-    df_log['timestamp'] = df_log['timestamp'].dt.tz_convert(ist)
+# ----------------- COMPUTE CHANGES -----------------
+changes = {}
+for side in ["ce","pe"]:
+    for greek in ["delta","vega","theta"]:
+        key_latest = f"{side}_{greek}"
+        key_open   = f"{side}_{greek}_open"
+        latest_val = float(today_rec.get(key_latest, 0))
+        open_val   = float(open_vals.get(key_open, 0))
+        changes[f"{side.upper()} {greek.capitalize()} Δ"] = latest_val - open_val
 
-open_vals = df_open.iloc[-1]
-latest = df_log.iloc[-1]
+# ----------------- DISPLAY -----------------
+# Build a one-row DataFrame
+df_disp = pd.DataFrame([changes])
 
-# Compute changes
-changes = {
-    'CE Δ Change': latest['ce_delta'] - open_vals['ce_delta'],
-    'PE Δ Change': latest['pe_delta'] - open_vals['pe_delta'],
-    'CE Vega Δ':   latest['ce_vega']  - open_vals['ce_vega'],
-    'PE Vega Δ':   latest['pe_vega']  - open_vals['pe_vega'],
-    'CE Theta Δ':  latest['ce_theta'] - open_vals['ce_theta'],
-    'PE Theta Δ':  latest['pe_theta'] - open_vals['pe_theta'],
-}
-
-# Color mapping
 def color_positive(val):
-    return 'color: green' if val > 0 else 'color: red' if val < 0 else 'color: black'
+    if val > 0:
+        return 'color: green'
+    elif val < 0:
+        return 'color: red'
+    else:
+        return 'color: black'
 
-st.subheader("📊 Live Greek Changes (vs 9:15 AM IST)")
+st.subheader("📊 Live Greek Changes (vs Open)")
 st.dataframe(
-    pd.DataFrame([changes])
-      .style
-      .applymap(color_positive)
-      .format("{:.2f}")
+    df_disp.style
+           .applymap(color_positive)
+           .format("{:.2f}")
 )
 
-# ----------------- FOOTER & REFRESH -----------------
+# ----------------- FOOTER & AUTO-REFRESH -----------------
 st.caption(f"✅ Last updated: {now.strftime('%d-%b-%Y %I:%M:%S %p IST')}")
 st.caption("🔄 Auto-refresh every 1 minute")
 st_autorefresh(interval=60000)
@@ -186,6 +134,5 @@ st.markdown("---")
 st.markdown(
     "<div style='text-align:center;color:grey;'>"
     "Made with ❤️ by Prakash Rai in partnership with ChatGPT | Powered by Zerodha APIs"
-    "</div>",
-    unsafe_allow_html=True
+    "</div>", unsafe_allow_html=True
 )
