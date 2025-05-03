@@ -2,23 +2,24 @@ name: 🔢 Fetch Option Greeks
 
 on:
   schedule:
-    # IST 09:15–15:30 => UTC 4:45–10:00
+    # Every 5 minutes during Indian market hours (09:15–15:30 IST → UTC 4:45–10:00)
     - cron: '*/5 4-10 * * 1-5'
   workflow_dispatch:
 
 jobs:
-  run-fetch:
+  fetch-greeks:
     runs-on: ubuntu-latest
     env:
       TZ: Asia/Kolkata
-      # Inject your service-account JSON directly here
-      GCREDS: ${{ secrets.GCREDS }}
+      GCREDS:           ${{ secrets.GCREDS }}
+      TOKEN_SHEET_ID:   ${{ secrets.TOKEN_SHEET_ID }}
+      GREEKS_SHEET_ID:  ${{ secrets.GREEKS_SHEET_ID }}
 
     steps:
-      - name: ⬇️ Checkout repo
+      - name: ⬇️ Checkout repository
         uses: actions/checkout@v3
 
-      - name: 🤳 Set up Python
+      - name: 🤳 Set up Python 3.10
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
@@ -29,3 +30,6 @@ jobs:
 
       - name: ⏳ Run Greek Logger
         run: python fetch_option_data.py
+
+      - name: ✅ Success
+        run: echo "Greeks have been logged to your GreeksData sheet."
