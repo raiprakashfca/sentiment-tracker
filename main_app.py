@@ -88,14 +88,18 @@ except Exception as e:
 try:
     ws_log = wb.worksheet("GreeksLog")
 except Exception as e:
-    st.error(f"❌ Cannot access 'GreeksLog' tab: {e}
-Make sure the sheet has a 'GreeksLog' worksheet and the service account has access.")
+    st.error(
+        "❌ Cannot access 'GreeksLog' tab: {}\n".format(e)
+        + "Make sure the sheet has a 'GreeksLog' worksheet and the service account has access."
+    )
     st.stop()
 try:
     ws_open = wb.worksheet("GreeksOpen")
 except Exception as e:
-    st.error(f"❌ Cannot access 'GreeksOpen' tab: {e}
-Make sure the sheet has a 'GreeksOpen' worksheet and the service account has access.")
+    st.error(
+        "❌ Cannot access 'GreeksOpen' tab: {}\n".format(e)
+        + "Make sure the sheet has a 'GreeksOpen' worksheet and the service account has access."
+    )
     st.stop()
 
 # Fetch records safely
