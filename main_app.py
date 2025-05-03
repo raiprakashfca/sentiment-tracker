@@ -104,7 +104,7 @@ except Exception as e:
     )
     st.stop()
 
-# Fetch records safely (bypass unique-header error)
+# Fetch records safely (bypass unique-header error) (bypass unique-header error)
 try:
     raw_log = ws_log.get_all_values()
     headers = raw_log[0]
@@ -145,13 +145,6 @@ else:
     open_vals = df_log.iloc[0]
 
 latest = df_log.iloc[-1]
-
-# ----------------- PROCESS DATA -----------------
-    st.error(
-        "❌ No data found in Google Sheets. Please run the fetch workflows at least once "
-        "to populate the GreeksLog and GreeksOpen sheets."
-    )
-    st.stop()
 
 # ----------------- PROCESS DATA -----------------
 # Convert timestamps to IST
