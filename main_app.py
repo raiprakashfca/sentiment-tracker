@@ -117,6 +117,19 @@ for side in ["ce", "pe"]:
 # Build display DataFrame
 df_disp = pd.DataFrame([changes])
 
+# ----------------- DISPLAY UTILS -----------------
+# color mapping for positive/negative values
+def color_positive(val):
+    if val > 0:
+        return 'color: green'
+    elif val < 0:
+        return 'color: red'
+    else:
+        return 'color: black'
+
+# ----------------- DISPLAY -----------------
+df_disp = pd.DataFrame([changes])
+
 st.subheader("📊 Live Greek Changes (vs Open)")
 st.dataframe(
     df_disp.style
