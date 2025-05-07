@@ -40,104 +40,74 @@ for NIFTY Options (0.05 to 0.60 Delta Range).
 Tracking both **CE** and **PE** separately.
 """)
 
-# ----------------- LOAD GOOGLE SHEET SECRETS -----------------
-# Load service-account creds from [gcreds] in secrets.toml
+# ----------------- LOAD SECRETS -----------------
 gcreds = st.secrets.get("gcreds")
 if not gcreds:
-    st.error("❌ 'gcreds' not found in Streamlit secrets. Paste your service-account JSON under [gcreds].")
+    st.error("❌ 'gcreds' section not found in secrets.toml. Paste your service-account JSON under [gcreds].")
     st.stop()
-
-# Load GreeksData sheet ID
 sheet_id = st.secrets.get("GREEKS_SHEET_ID")
 if not sheet_id:
-    st.error("❌ 'GREEKS_SHEET_ID' not found in Streamlit secrets. Add it as a top-level entry.")
+    st.error("❌ 'GREEKS_SHEET_ID' not found in secrets.toml. Add it as GREEKS_SHEET_ID.")
     st.stop()
 
 # ----------------- GOOGLE SHEETS AUTH -----------------
 scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 gc = gspread.authorize(creds)
+wb = gc.open_by_key(sheet_id)
 
-# Open GreeksData workbook
-def open_sheet(key):
-    try:
-        return gc.open_by_key(key)
-    except Exception as e:
-        st.error(f"❌ Cannot open sheet {key}: {e}")
-        st.stop()
-wb = open_sheet(sheet_id)
+# ----------------- LOAD LOG WORKSHEET -----------------
+# Read all values for GreeksLog
+entries = wb.worksheet("GreeksLog").get_all_values()
+if not entries or len(entries) < 2:
+    st.error("❌ No data in 'GreeksLog'. Run the fetch script to populate baseline and logs.")
+    st.stop()
+headers = entries[0]
+data_rows = entries[1:]
+# Build df_log, ensure correct dtypes
+df_log = pd.DataFrame(data_rows, columns=headers)
+for col in headers[1:]:  # all except timestamp
+    df_log[col] = pd.to_numeric(df_log[col], errors='coerce')
+# Parse timestamp and localize
+df_log['timestamp'] = pd.to_datetime(df_log['timestamp']).dt.tz_localize('UTC').dt.tz_convert(ist)
 
-# ----------------- LOAD WORKSHEETS -----------------
-def get_df(ws_name, required=True):
-    try:
-        ws = wb.worksheet(ws_name)
-    except Exception as e:
-        if required:
-            st.error(f"❌ Cannot access '{ws_name}' tab: {e}")
-            st.stop()
-        else:
-            st.warning(f"⚠️ '{ws_name}' missing: {e}")
-            return pd.DataFrame()
-    # Use get_all_values to handle non-unique headers
-    all_vals = ws.get_all_values()
-    if not all_vals or len(all_vals) < 2:
-        if required:
-            st.error(f"❌ '{ws_name}' is empty or missing rows.")
-            st.stop()
-        else:
-            return pd.DataFrame()
-    headers = all_vals[0]
-    rows = all_vals[1:]
-    df = pd.DataFrame(rows, columns=headers)
-    return df
-
-# Load data
-
-df_log = get_df("GreeksLog", required=True)
-df_open = get_df("GreeksOpen", required=False)
-
-# ----------------- BASELINE SELECTION -----------------
-# Decide baseline values: use last open snapshot if available, else first log entry
-if not df_open.empty:
-    open_vals = df_open.iloc[-1]
+# ----------------- BASELINE SNAPSHOT -----------------
+# Attempt to load existing open snapshot
+open_rows = wb.worksheet("GreeksOpen").get_all_values()
+if len(open_rows) >= 2:
+    open_vals = pd.Series(open_rows[1], index=open_rows[0]).astype({col: float for col in headers[1:]})
 else:
-    st.warning("⚠️ No open snapshot found in 'GreeksOpen'. Using first record of 'GreeksLog' as baseline.")
-    open_vals = df_log.iloc[0]
-# Latest record
-today_rec = df_log.iloc[-1]
+    # No open snapshot yet: record baseline at first log entry of today's session
+    baseline = df_log[df_log['timestamp'].dt.date == now.date()]
+    if baseline.empty:
+        st.error("❌ No log entry found for today's date. Ensure the fetch script ran at market open.")
+        st.stop()
+    open_entry = baseline.iloc[0]
+    # clear and write open snapshot
+iw = wb.worksheet("GreeksOpen")
+iw.clear()
+iw.append_row([open_entry['timestamp'].isoformat()] + [open_entry[c] for c in headers[1:]])
+open_vals = pd.Series([open_entry[c] for c in headers], index=headers).astype({col: float for col in headers[1:]})
 
-# Compute changes for display
+# ----------------- LATEST RECORD -----------------
+latest = df_log.iloc[-1]
+
+# ----------------- COMPUTE CHANGES -----------------
 changes = {}
-for side in ["ce", "pe"]:
-    for greek in ["delta", "vega", "theta"]:
+for greek in ['delta','vega','theta']:
+    for side in ['ce','pe']:
         key = f"{side}_{greek}"
-        latest_val = float(today_rec.get(key, 0))
-        open_val = float(open_vals.get(key, 0))
-        changes[f"{side.upper()} {greek.capitalize()} Δ"] = latest_val - open_val
+        changes_key = f"{side.upper()} {greek.capitalize()} Δ"
+        changes[changes_key] = float(latest[key]) - float(open_vals[key])
 # Build display DataFrame
 df_disp = pd.DataFrame([changes])
 
-# ----------------- DISPLAY UTILS -----------------
-# color mapping for positive/negative values
-def color_positive(val):
-    if val > 0:
-        return 'color: green'
-    elif val < 0:
-        return 'color: red'
-    else:
-        return 'color: white'
-
 # ----------------- DISPLAY -----------------
-df_disp = pd.DataFrame([changes])
-
+def color_positive(val):
+    if val > 0: return 'color: green'
+    if val < 0: return 'color: red'
+    return 'color: white'
 st.subheader("📊 Live Greek Changes (vs Open)")
-st.dataframe(
-    df_disp.style
-           .applymap(color_positive)
-           .format("{:.2f}")
-)
-
-# ----------------- FOOTER & AUTO-REFRESH -----------------("📊 Live Greek Changes (vs Open)")
 st.dataframe(
     df_disp.style
            .applymap(color_positive)
@@ -148,7 +118,6 @@ st.dataframe(
 st.caption(f"✅ Last updated: {now.strftime('%d-%b-%Y %I:%M:%S %p IST')}")
 st.caption("🔄 Auto-refresh every 1 minute")
 st_autorefresh(interval=60000)
-
 st.markdown("---")
 st.markdown(
     "<div style='text-align:center;color:grey;'>"
