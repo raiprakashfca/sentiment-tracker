@@ -64,9 +64,16 @@ if not entries or len(entries) < 2:
     st.stop()
 headers = entries[0]
 data_rows = entries[1:]
-# Build df_log
+# Build df_log with normalized (lowercase) headers
+headers_raw = entries[0]
+headers = [h.strip().lower() for h in headers_raw]
 df_log = pd.DataFrame(data_rows, columns=headers)
-# Parse timestamp and localize
+# Parse timestamp column (lowercased)
+if 'timestamp' not in df_log.columns:
+    st.error("❌ 'timestamp' column not found in GreeksLog sheet. Check header name.")
+    st.stop()
+df_log['timestamp'] = pd.to_datetime(df_log['timestamp']).dt.tz_localize('UTC').dt.tz_convert(ist)
+
 df_log['timestamp'] = pd.to_datetime(df_log['timestamp']).dt.tz_localize('UTC').dt.tz_convert(ist)
 
 # ----------------- BASELINE SNAPSHOT ----------------- and localize
