@@ -62,9 +62,41 @@ entries = wb.worksheet("GreeksLog").get_all_values()
 if not entries or len(entries) < 2:
     st.error("❌ No data in 'GreeksLog'. Run the fetch script to populate baseline and logs.")
     st.stop()
-headers = entries[0]
+headers_raw = entries[0]
 data_rows = entries[1:]
-# Build df_log with normalized (lowercase) headers
+# Build raw DataFrame
+df_raw = pd.DataFrame(data_rows, columns=headers_raw)
+# Normalize column names to lower-case keys
+col_map = {}
+for orig in headers_raw:
+    key = orig.strip().lower()
+    if 'timestamp' in key:
+        col_map[orig] = 'timestamp'
+    elif 'ce_delta' == key:
+        col_map[orig] = 'ce_delta'
+    elif 'pe_delta' == key:
+        col_map[orig] = 'pe_delta'
+    elif 'ce_vega' == key:
+        col_map[orig] = 'ce_vega'
+    elif 'pe_vega' == key:
+        col_map[orig] = 'pe_vega'
+    elif 'ce_theta' == key:
+        col_map[orig] = 'ce_theta'
+    elif 'pe_theta' == key:
+        col_map[orig] = 'pe_theta'
+    else:
+        col_map[orig] = orig.strip()
+# Rename and select relevant columns
+df_log = df_raw.rename(columns=col_map)
+required = ['timestamp','ce_delta','pe_delta','ce_vega','pe_vega','ce_theta','pe_theta']
+missing = [c for c in required if c not in df_log.columns]
+if missing:
+    st.error(f"❌ Missing columns in GreeksLog: {missing}")
+    st.stop()
+# Parse timestamp column
+df_log['timestamp'] = pd.to_datetime(df_log['timestamp']).dt.tz_localize('UTC').dt.tz_convert(ist)
+
+# ----------------- BASELINE SNAPSHOT -----------------
 headers_raw = entries[0]
 headers = [h.strip().lower() for h in headers_raw]
 df_log = pd.DataFrame(data_rows, columns=headers)
