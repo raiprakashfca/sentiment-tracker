@@ -46,22 +46,32 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 gc = gspread.authorize(creds)
 wb = gc.open_by_key(sheet_id)
 
-# ----------------- READ GreeksLog ----------------- 
+# ----------------- READ GreeksLog -----------------
 # Use get_all_values to avoid header-uniqueness issues
 sheet = wb.worksheet("GreeksLog")
 all_values = sheet.get_all_values()
-if len(all_values) < 2:
-    st.error("❌ Worksheet 'GreeksLog' must have a header row and at least one data row.")
+if not all_values:
+    st.error("❌ Worksheet 'GreeksLog' is empty. Please run the fetch script.")
     st.stop()
-headers = [h.strip().lower() for h in all_values[0]]
-if headers != REQUIRED_COLUMNS:
-    st.error(
-        f"❌ 'GreeksLog' headers mismatch.\n"
-        f"Expected: {REQUIRED_COLUMNS}\n"
-        f"Found:    {headers}"
-    )
+# Determine if first row is header or actual data
+first_row = [h.strip().lower() for h in all_values[0]]
+if first_row == REQUIRED_COLUMNS:
+    # header row present
+    data_rows = all_values[1:]
+    df_log = pd.DataFrame(data_rows, columns=REQUIRED_COLUMNS)
+else:
+    # no header row; treat all rows as data
+    data_rows = all_values
+    df_log = pd.DataFrame(data_rows, columns=REQUIRED_COLUMNS)
+# Parse and convert types
+# Parse timestamps
+try:
+    df_log['timestamp'] = pd.to_datetime(df_log['timestamp']).dt.tz_localize('UTC').dt.tz_convert(ist)
+except Exception as e:
+    st.error(f"❌ Failed to parse timestamps in 'GreeksLog': {e}")
     st.stop()
-# Build DataFrame
+# Convert numeric columns
+df_log[REQUIRED_COLUMNS[1:]] = df_log[REQUIRED_COLUMNS[1:]].apply(pd.to_numeric, errors='coerce')
 data = all_values[1:]
 df_log = pd.DataFrame(data, columns=headers)
 # Parse types
