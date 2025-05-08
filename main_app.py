@@ -64,11 +64,12 @@ if not entries or len(entries) < 2:
     st.stop()
 headers = entries[0]
 data_rows = entries[1:]
-# Build df_log, ensure correct dtypes
+# Build df_log
 df_log = pd.DataFrame(data_rows, columns=headers)
-for col in headers[1:]:  # all except timestamp
-    df_log[col] = pd.to_numeric(df_log[col], errors='coerce')
 # Parse timestamp and localize
+df_log['timestamp'] = pd.to_datetime(df_log['timestamp']).dt.tz_localize('UTC').dt.tz_convert(ist)
+
+# ----------------- BASELINE SNAPSHOT ----------------- and localize
 df_log['timestamp'] = pd.to_datetime(df_log['timestamp']).dt.tz_localize('UTC').dt.tz_convert(ist)
 
 # ----------------- BASELINE SNAPSHOT -----------------
