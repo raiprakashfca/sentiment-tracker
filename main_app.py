@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
-import datetime
-import pytz
+import datetime\import pytz
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from streamlit_autorefresh import st_autorefresh
@@ -46,35 +45,37 @@ all_vals = wb.worksheet("GreeksLog").get_all_values()
 if len(all_vals) < 2:
     st.error("❌ 'GreeksLog' must have headers + data rows.")
     st.stop()
-# Identify data rows
 headers = [h.strip().lower() for h in all_vals[0]]
 if headers == REQUIRED_COLUMNS:
     rows = all_vals[1:]
 else:
     rows = all_vals
+
 # Build DataFrame
 df_log = pd.DataFrame(rows, columns=REQUIRED_COLUMNS)
-# Parse timestamps robustly
+
+# Parse timestamps
 ts = pd.to_datetime(df_log['timestamp'], utc=True)
-# If already tz-aware, skip localize
 try:
     ts = ts.dt.tz_localize('UTC')
 except Exception:
     pass
 df_log['timestamp'] = ts.dt.tz_convert(ist)
+
 # Convert numeric columns
 for col in REQUIRED_COLUMNS[1:]:
     df_log[col] = pd.to_numeric(df_log[col], errors='coerce')
 
 # ----------------- OPEN SNAPSHOT -----------------
 def get_open():
+    # Try existing snapshot
     try:
         vals = wb.worksheet("GreeksOpen").get_all_values()
         if len(vals) >= 2:
             return pd.Series(vals[1], index=vals[0]).astype(float)
     except Exception:
         pass
-    # Fallback: first log entry of today
+    # Fallback: first record today
     today_rows = df_log[df_log['timestamp'].dt.date == now.date()]
     if today_rows.empty:
         st.error("❌ No today's entry in 'GreeksLog'; run fetch at open.")
@@ -88,7 +89,7 @@ def get_open():
     try:
         ws.append_row([base['timestamp'].isoformat()] + [base[c] for c in REQUIRED_COLUMNS[1:]])
     except Exception as e:
-        st.warning(f"⚠️ Could not write to 'GreeksOpen' sheet: {e}")['timestamp'].isoformat()] + [base[c] for c in REQUIRED_COLUMNS[1:]])
+        st.warning(f"⚠️ Could not write to 'GreeksOpen' sheet: {e}")
     return base[REQUIRED_COLUMNS].astype(float)
 
 open_vals = get_open()
@@ -98,15 +99,14 @@ latest = df_log.iloc[-1]
 changes = {col.replace('_',' ').upper() + ' Δ': float(latest[col]) - float(open_vals[col]) for col in REQUIRED_COLUMNS[1:]}
 
 # ----------------- DISPLAY -----------------
-def color_positive(v): return 'color: green' if v>0 else 'color: red' if v<0 else 'color: white'
+def color_positive(v):
+    return 'color: green' if v>0 else 'color: red' if v<0 else 'color: white'
 
 st.subheader("📊 Live Greek Changes (vs Open)")
-\
-st.dataframe(
-    pd.DataFrame([changes]).style.applymap(color_positive).format("{:.2f}")
-)
+disp = pd.DataFrame([changes])
+st.dataframe(disp.style.applymap(color_positive).format("{:.2f}"))
 
-# ----------------- FOOTER -----------------
+# ----------------- FOOTER & REFRESH -----------------
 st.caption(f"✅ Last updated: {now.strftime('%d-%b-%Y %I:%M:%S %p IST')}")
 st.caption("🔄 Auto-refresh every 1 minute")
 st_autorefresh(interval=60000)
