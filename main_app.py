@@ -73,7 +73,11 @@ def get_open():
     try:
         vals = wb.worksheet("GreeksOpen").get_all_values()
         if len(vals) >= 2:
-            return pd.Series(vals[1], index=vals[0]).astype(float)
+            ser = pd.Series(vals[1], index=vals[0])
+            # Drop timestamp, keep numeric columns
+            return ser.drop('timestamp').astype(float)
+    except Exception:
+        pass
     except Exception:
         pass
     # Fallback: first record today
@@ -91,7 +95,8 @@ def get_open():
         ws.append_row([base['timestamp'].isoformat()] + [base[c] for c in REQUIRED_COLUMNS[1:]])
     except Exception as e:
         st.warning(f"⚠️ Could not write to 'GreeksOpen' sheet: {e}")
-    return base[REQUIRED_COLUMNS].astype(float)
+    # Return only numeric columns as floats
+    return base[REQUIRED_COLUMNS[1:]].astype(float)
 
 open_vals = get_open()
 
