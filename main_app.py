@@ -81,8 +81,14 @@ def get_open():
         st.stop()
     base = today_rows.iloc[0]
     ws = wb.worksheet("GreeksOpen")
-    ws.clear()
-    ws.append_row([base['timestamp'].isoformat()] + [base[c] for c in REQUIRED_COLUMNS[1:]])
+    try:
+        ws.clear()
+    except Exception as e:
+        st.warning(f"⚠️ Could not clear 'GreeksOpen' sheet: {e}")
+    try:
+        ws.append_row([base['timestamp'].isoformat()] + [base[c] for c in REQUIRED_COLUMNS[1:]])
+    except Exception as e:
+        st.warning(f"⚠️ Could not write to 'GreeksOpen' sheet: {e}")['timestamp'].isoformat()] + [base[c] for c in REQUIRED_COLUMNS[1:]])
     return base[REQUIRED_COLUMNS].astype(float)
 
 open_vals = get_open()
