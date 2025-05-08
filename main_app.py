@@ -2,16 +2,23 @@ import streamlit as st
 import pandas as pd
 import datetime
 import pytz
-import json
-import os
 import gspread
+import os
 from oauth2client.service_account import ServiceAccountCredentials
 from streamlit_autorefresh import st_autorefresh
+
+# ----------------- CONFIGURATION -----------------
+REQUIRED_COLUMNS = [
+    'timestamp',
+    'ce_delta', 'pe_delta',
+    'ce_vega',  'pe_vega',
+    'ce_theta','pe_theta'
+]
 
 # ----------------- PAGE SETUP -----------------
 st.set_page_config(page_title="📈 Sentiment Tracker", layout="wide")
 
-# ----------------- TIMEZONE SETUP -----------------
+# ----------------- TIMEZONE -----------------
 ist = pytz.timezone("Asia/Kolkata")
 now = datetime.datetime.now(ist)
 
@@ -23,31 +30,14 @@ with col1:
 with col2:
     st.metric(label="🕒 Market Time (IST)", value=now.strftime("%H:%M:%S"))
 
-# ----------------- EXPLANATION -----------------
-st.markdown("""
-This dashboard tracks the *real-time change* in:
-- Delta
-- Vega
-- Theta
-for NIFTY Options (0.05 to 0.60 Delta Range).
-
-**Interpretation:**
-- Positive Delta Change → Bullish Bias
-- Negative Delta Change → Bearish Bias
-- Rising Vega → Volatility Expansion
-- Rising Theta → Faster Premium Decay
-
-Tracking both **CE** and **PE** separately.
-""")
-
-# ----------------- LOAD SECRETS -----------------
+# ----------------- SECRETS -----------------
 gcreds = st.secrets.get("gcreds")
 if not gcreds:
-    st.error("❌ 'gcreds' section not found in secrets.toml. Paste your service-account JSON under [gcreds].")
+    st.error("❌ 'gcreds' section missing in secrets.toml.")
     st.stop()
 sheet_id = st.secrets.get("GREEKS_SHEET_ID")
 if not sheet_id:
-    st.error("❌ 'GREEKS_SHEET_ID' not found in secrets.toml. Add it as GREEKS_SHEET_ID.")
+    st.error("❌ 'GREEKS_SHEET_ID' missing in secrets.toml.")
     st.stop()
 
 # ----------------- GOOGLE SHEETS AUTH -----------------
@@ -56,105 +46,74 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 gc = gspread.authorize(creds)
 wb = gc.open_by_key(sheet_id)
 
-# ----------------- LOAD LOG WORKSHEET -----------------
-# Read all values for GreeksLog
-entries = wb.worksheet("GreeksLog").get_all_values()
-if not entries or len(entries) < 2:
-    st.error("❌ No data in 'GreeksLog'. Run the fetch script to populate baseline and logs.")
+# ----------------- READ GreeksLog ----------------- 
+# Use get_all_values to avoid header-uniqueness issues
+sheet = wb.worksheet("GreeksLog")
+all_values = sheet.get_all_values()
+if len(all_values) < 2:
+    st.error("❌ Worksheet 'GreeksLog' must have a header row and at least one data row.")
     st.stop()
-headers_raw = entries[0]
-data_rows = entries[1:]
-# Build raw DataFrame
-df_raw = pd.DataFrame(data_rows, columns=headers_raw)
-# Normalize column names to lower-case keys
-col_map = {}
-for orig in headers_raw:
-    key = orig.strip().lower()
-    if 'timestamp' in key:
-        col_map[orig] = 'timestamp'
-    elif 'ce_delta' == key:
-        col_map[orig] = 'ce_delta'
-    elif 'pe_delta' == key:
-        col_map[orig] = 'pe_delta'
-    elif 'ce_vega' == key:
-        col_map[orig] = 'ce_vega'
-    elif 'pe_vega' == key:
-        col_map[orig] = 'pe_vega'
-    elif 'ce_theta' == key:
-        col_map[orig] = 'ce_theta'
-    elif 'pe_theta' == key:
-        col_map[orig] = 'pe_theta'
-    else:
-        col_map[orig] = orig.strip()
-# Rename and select relevant columns
-df_log = df_raw.rename(columns=col_map)
-required = ['timestamp','ce_delta','pe_delta','ce_vega','pe_vega','ce_theta','pe_theta']
-missing = [c for c in required if c not in df_log.columns]
-if missing:
-    st.error(f"❌ Missing columns in GreeksLog: {missing}")
+headers = [h.strip().lower() for h in all_values[0]]
+if headers != REQUIRED_COLUMNS:
+    st.error(
+        f"❌ 'GreeksLog' headers mismatch.\n"
+        f"Expected: {REQUIRED_COLUMNS}\n"
+        f"Found:    {headers}"
+    )
     st.stop()
-# Parse timestamp column
+# Build DataFrame
+data = all_values[1:]
+df_log = pd.DataFrame(data, columns=headers)
+# Parse types
 df_log['timestamp'] = pd.to_datetime(df_log['timestamp']).dt.tz_localize('UTC').dt.tz_convert(ist)
+for col in REQUIRED_COLUMNS[1:]:
+    df_log[col] = pd.to_numeric(df_log[col], errors='coerce')
 
-# ----------------- BASELINE SNAPSHOT -----------------
-headers_raw = entries[0]
-headers = [h.strip().lower() for h in headers_raw]
-df_log = pd.DataFrame(data_rows, columns=headers)
-# Parse timestamp column (lowercased)
-if 'timestamp' not in df_log.columns:
-    st.error("❌ 'timestamp' column not found in GreeksLog sheet. Check header name.")
-    st.stop()
-df_log['timestamp'] = pd.to_datetime(df_log['timestamp']).dt.tz_localize('UTC').dt.tz_convert(ist)
-
-df_log['timestamp'] = pd.to_datetime(df_log['timestamp']).dt.tz_localize('UTC').dt.tz_convert(ist)
-
-# ----------------- BASELINE SNAPSHOT ----------------- and localize
-df_log['timestamp'] = pd.to_datetime(df_log['timestamp']).dt.tz_localize('UTC').dt.tz_convert(ist)
-
-# ----------------- BASELINE SNAPSHOT -----------------
-# Attempt to load existing open snapshot
-open_rows = wb.worksheet("GreeksOpen").get_all_values()
-if len(open_rows) >= 2:
-    open_vals = pd.Series(open_rows[1], index=open_rows[0]).astype({col: float for col in headers[1:]})
-else:
-    # No open snapshot yet: record baseline at first log entry of today's session
-    baseline = df_log[df_log['timestamp'].dt.date == now.date()]
-    if baseline.empty:
-        st.error("❌ No log entry found for today's date. Ensure the fetch script ran at market open.")
+# ----------------- OPEN SNAPSHOT -----------------
+# Read existing GreeksOpen or write baseline if missing
+def get_open_snapshot():
+    try:
+        ws = wb.worksheet("GreeksOpen")
+        vals = ws.get_all_values()
+        if len(vals) >= 2:
+            row = vals[1]
+            return pd.Series(row, index=vals[0]).astype(float)
+    except Exception:
+        pass
+    # Fallback: today's first log entry
+    today_logs = df_log[df_log['timestamp'].dt.date == now.date()]
+    if today_logs.empty:
+        st.error("❌ No 'GreeksLog' entry for today to use as baseline.")
         st.stop()
-    open_entry = baseline.iloc[0]
-    # clear and write open snapshot
-iw = wb.worksheet("GreeksOpen")
-iw.clear()
-iw.append_row([open_entry['timestamp'].isoformat()] + [open_entry[c] for c in headers[1:]])
-open_vals = pd.Series([open_entry[c] for c in headers], index=headers).astype({col: float for col in headers[1:]})
+    baseline = today_logs.iloc[0]
+    # Overwrite sheet with baseline
+    ws = wb.worksheet("GreeksOpen")
+    ws.clear()
+    ws.append_row([baseline['timestamp'].isoformat()] + [baseline[c] for c in REQUIRED_COLUMNS[1:]])
+    return baseline[REQUIRED_COLUMNS].astype(float)
 
-# ----------------- LATEST RECORD -----------------
-latest = df_log.iloc[-1]
+open_vals = get_open_snapshot()
 
 # ----------------- COMPUTE CHANGES -----------------
+latest = df_log.iloc[-1]
 changes = {}
-for greek in ['delta','vega','theta']:
-    for side in ['ce','pe']:
-        key = f"{side}_{greek}"
-        changes_key = f"{side.upper()} {greek.capitalize()} Δ"
-        changes[changes_key] = float(latest[key]) - float(open_vals[key])
-# Build display DataFrame
-df_disp = pd.DataFrame([changes])
+for col in REQUIRED_COLUMNS[1:]:
+    label = col.replace('_', ' ').upper() + ' Δ'
+    changes[label] = float(latest[col]) - float(open_vals[col])
 
 # ----------------- DISPLAY -----------------
-def color_positive(val):
-    if val > 0: return 'color: green'
-    if val < 0: return 'color: red'
-    return 'color: white'
+# Color mapping
+
+def color_positive(v):
+    return 'color: green' if v>0 else 'color: red' if v<0 else 'color: white'
+
 st.subheader("📊 Live Greek Changes (vs Open)")
+df_disp = pd.DataFrame([changes])
 st.dataframe(
-    df_disp.style
-           .applymap(color_positive)
-           .format("{:.2f}")
+    df_disp.style.applymap(color_positive).format("{:.2f}")
 )
 
-# ----------------- FOOTER & AUTO-REFRESH -----------------
+# ----------------- FOOTER & REFRESH -----------------
 st.caption(f"✅ Last updated: {now.strftime('%d-%b-%Y %I:%M:%S %p IST')}")
 st.caption("🔄 Auto-refresh every 1 minute")
 st_autorefresh(interval=60000)
