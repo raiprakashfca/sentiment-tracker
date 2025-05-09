@@ -69,34 +69,22 @@ for col in REQUIRED_COLUMNS[1:]:
 
 # ----------------- OPEN SNAPSHOT -----------------
 def get_open():
-    # Try existing snapshot
+    # Attempt to read existing open snapshot
     try:
         vals = wb.worksheet("GreeksOpen").get_all_values()
         if len(vals) >= 2:
             ser = pd.Series(vals[1], index=vals[0])
-            # Drop timestamp, keep numeric columns
             return ser.drop('timestamp').astype(float)
     except Exception:
         pass
-    except Exception:
-        pass
-    # Fallback: first record today
+    # Fallback: first record of today from df_log
     today_rows = df_log[df_log['timestamp'].dt.date == now.date()]
     if today_rows.empty:
-        st.error("❌ No today's entry in 'GreeksLog'; run fetch at open.")
+        st.error("❌ No 'GreeksLog' entry for today; ensure fetch script ran at market open.")
         st.stop()
     base = today_rows.iloc[0]
-    ws = wb.worksheet("GreeksOpen")
-    try:
-        ws.clear()
-    except Exception as e:
-        st.warning(f"⚠️ Could not clear 'GreeksOpen' sheet: {e}")
-    try:
-        ws.append_row([base['timestamp'].isoformat()] + [base[c] for c in REQUIRED_COLUMNS[1:]])
-    except Exception as e:
-        st.warning(f"⚠️ Could not write to 'GreeksOpen' sheet: {e}")
-    # Return only numeric columns as floats
-    return base[REQUIRED_COLUMNS[1:]].astype(float)
+    # Return numeric columns only
+    return pd.Series({c: float(base[c]) for c in REQUIRED_COLUMNS[1:]})
 
 open_vals = get_open()
 
@@ -104,15 +92,45 @@ open_vals = get_open()
 latest = df_log.iloc[-1]
 changes = {col.replace('_',' ').upper() + ' Δ': float(latest[col]) - float(open_vals[col]) for col in REQUIRED_COLUMNS[1:]}
 
-# ----------------- DISPLAY -----------------
-def color_positive(v):
-    return 'color: green' if v>0 else 'color: red' if v<0 else 'color: white'
+# ----------------- DISPLAY ALL INTERVAL CHANGES -----------------
+# Build a table of changes at each timestamp vs opening baseline
+changes_list = []
+for _, row in df_log.iterrows():
+    ts = row['timestamp']
+    entry = {'timestamp': ts}
+    for col in REQUIRED_COLUMNS[1:]:
+        entry[col + '_change'] = float(row[col]) - float(open_vals[col])
+    changes_list.append(entry)
 
-st.subheader("📊 Live Greek Changes (vs Open)")
-disp = pd.DataFrame([changes])
-st.dataframe(disp.style.applymap(color_positive).format("{:.2f}"))
+df_changes = pd.DataFrame(changes_list)
+# Color coding function
+styled = df_changes.style.format({'timestamp': lambda t: t.strftime('%Y-%m-%d %H:%M:%S')} )
+for change_col in [c for c in df_changes.columns if c.endswith('_change')]:
+    styled = styled.applymap(lambda v: 'color: green' if v>0 else 'color: red' if v<0 else 'color: white', subset=[change_col])
+    styled = styled.format({change_col: '{:.2f}'})
 
-# ----------------- FOOTER & REFRESH -----------------
+st.subheader("📈 Intraday Greek Changes")
+st.dataframe(styled)
+
+# ----------------- DOWNLOAD BUTTON -----------------
+# Export to Excel
+import io
+buffer = io.BytesIO()
+with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+    # save raw log and changes
+    df_log.to_excel(writer, sheet_name='RawLog', index=False)
+    df_changes.to_excel(writer, sheet_name='Changes', index=False)
+    writer.save()
+buffer.seek(0)
+
+st.download_button(
+    label="Download intraday data as Excel",
+    data=buffer,
+    file_name=f"greeks_intraday_{now.strftime('%Y%m%d')}.xlsx",
+    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+)
+
+# ----------------- FOOTER & REFRESH ----------------- & REFRESH -----------------
 st.caption(f"✅ Last updated: {now.strftime('%d-%b-%Y %I:%M:%S %p IST')}")
 st.caption("🔄 Auto-refresh every 1 minute")
 st_autorefresh(interval=60000)
