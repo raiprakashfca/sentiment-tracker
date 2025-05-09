@@ -94,15 +94,19 @@ changes = {col.replace('_',' ').upper() + ' Δ': float(latest[col]) - float(open
 
 # ----------------- DISPLAY ALL INTERVAL CHANGES -----------------
 # Build a table of changes at each timestamp vs opening baseline
-changes_list = []
-for _, row in df_log.iterrows():
-    ts = row['timestamp']
-    entry = {'timestamp': ts}
-    for col in REQUIRED_COLUMNS[1:]:
-        entry[col + '_change'] = float(row[col]) - float(open_vals[col])
-    changes_list.append(entry)
+# Ensure timestamps are in IST
+for i, entry in enumerate(changes_list):
+    ts = entry['timestamp']
+    # localize/convert to IST if needed
+    if hasattr(ts, 'tz_convert'):
+        entry['timestamp'] = ts.tz_convert(ist)
+    else:
+        entry['timestamp'] = pd.to_datetime(ts).tz_localize('UTC').tz_convert(ist)
 
+# Now build the DataFrame
+# Format timestamp column as string in IST
 df_changes = pd.DataFrame(changes_list)
+df_changes['timestamp'] = df_changes['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S %Z')
 # Color coding function
 styled = df_changes.style.format({'timestamp': lambda t: t.strftime('%Y-%m-%d %H:%M:%S')} )
 for change_col in [c for c in df_changes.columns if c.endswith('_change')]:
@@ -116,7 +120,8 @@ st.dataframe(styled)
 # Export to Excel
 import io
 buffer = io.BytesIO()
-with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+# Use openpyxl (built-in) to avoid requiring xlsxwriter
+with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
     # save raw log and changes
     df_log.to_excel(writer, sheet_name='RawLog', index=False)
     df_changes.to_excel(writer, sheet_name='Changes', index=False)
