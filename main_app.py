@@ -85,19 +85,27 @@ def get_open():
 open_vals = get_open()
 
 # ----------------- COMPUTE CHANGES -----------------
-# Latest snapshot changes
-today_latest = df_log.iloc[-1]
-# Build list of changes across intervals
+# Build list of changes across all logged intervals
 changes_list = []
 for _, row in df_log.iterrows():
-    entry = {'timestamp': row['timestamp']}
+    entry = {"timestamp": row["timestamp"]}
     for col in REQUIRED_COLUMNS[1:]:
+        # compute delta vs opening baseline
         entry[f"{col}_change"] = float(row[col]) - float(open_vals[col])
     changes_list.append(entry)
-# Create DataFrame
+
+# Ensure we have data
+if not changes_list:
+    st.error("❌ No interval data available to display.")
+    st.stop()
+
+# Create DataFrame of changes
 df_changes = pd.DataFrame(changes_list)
-# Format timestamp
-df_changes['timestamp'] = df_changes['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S %Z')
+# Format timestamp into IST string
+if pd.api.types.is_datetime64_any_dtype(df_changes['timestamp']):
+    df_changes['timestamp'] = df_changes['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S %Z')
+else:
+    df_changes['timestamp'] = pd.to_datetime(df_changes['timestamp'], utc=True).dt.tz_localize('UTC').dt.tz_convert(ist).dt.strftime('%Y-%m-%d %H:%M:%S %Z')
 
 # ----------------- DISPLAY -----------------
 def color_positive(v):
