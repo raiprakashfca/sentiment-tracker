@@ -118,17 +118,17 @@ st.dataframe(
 )
 
 # ----------------- DOWNLOAD BUTTON -----------------
+# Export as CSV to avoid missing Excel engines
 import io
-buffer = io.BytesIO()
-with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-    df_log.to_excel(writer, sheet_name='RawLog', index=False)
-    df_changes.to_excel(writer, sheet_name='Changes', index=False)
-reader_excel = buffer.getvalue()
+csv_buffer = io.BytesIO()
+csv_buffer.write(df_changes.to_csv(index=False).encode('utf-8'))
+csv_buffer.seek(0)
+
 st.download_button(
-    label="Download intraday data as Excel",
-    data=reader_excel,
-    file_name=f"greeks_intraday_{now.strftime('%Y%m%d')}.xlsx",
-    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    label="Download intraday data as CSV",
+    data=csv_buffer,
+    file_name=f"greeks_intraday_{now.strftime('%Y%m%d')}.csv",
+    mime='text/csv'
 )
 
 # ----------------- FOOTER & REFRESH -----------------
