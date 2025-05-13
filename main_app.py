@@ -7,67 +7,48 @@ from oauth2client.service_account import ServiceAccountCredentials
 from streamlit_autorefresh import st_autorefresh
 
 # ----------------- CONFIG -----------------
-REQUIRED_COLUMNS = ['timestamp','ce_delta','pe_delta','ce_vega','pe_vega','ce_theta','pe_theta']
+REQUIRED_COLUMNS = [
+    'timestamp',
+    'nifty_ce_delta', 'nifty_pe_delta', 'nifty_ce_vega', 'nifty_pe_vega', 'nifty_ce_theta', 'nifty_pe_theta',
+    'bn_ce_delta',    'bn_pe_delta',    'bn_ce_vega',    'bn_pe_vega',    'bn_ce_theta',    'bn_pe_theta'
+]
 
 # ----------------- PAGE SETUP -----------------
 st.set_page_config(page_title="📈 Sentiment Tracker", layout="wide")
 ist = pytz.timezone("Asia/Kolkata")
 now = datetime.datetime.now(ist)
 
-# ----------------- HEADER -----------------
-col1, col2 = st.columns([8,2])
-with col1:
-    st.title("📈 Option Greeks Sentiment Tracker")
-    st.markdown(f"**🗓️ {now.strftime('%A, %d %B %Y, %I:%M:%S %p IST')}**")
-with col2:
-    st.metric("🕒 Market Time (IST)", now.strftime("%H:%M:%S"))
-
-# ----------------- EXPLANATION -----------------
-st.markdown("""
-Tracks real-time changes in Option Greeks (Delta, Vega, Theta)
-for NIFTY options within 0.05–0.60 Delta range.
-""")
-
-# ----------------- SECRETS -----------------
-gcreds = st.secrets.get("gcreds")
-sheet_id = st.secrets.get("GREEKS_SHEET_ID")
-if not gcreds or not sheet_id:
-    st.error("❌ Missing 'gcreds' or 'GREEKS_SHEET_ID' in Streamlit secrets.")
-    st.stop()
-
-# ----------------- GOOGLE SHEETS AUTH -----------------
+# ----------------- AUTHENTICATION -----------------
 scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
+raw = st.secrets.get("GCREDS") or st.secrets.get("gcreds")
+creds = ServiceAccountCredentials.from_json_keyfile_dict(raw, scope)
 gc = gspread.authorize(creds)
+sheet_id = st.secrets.get("GREEKS_SHEET_ID")
 wb = gc.open_by_key(sheet_id)
 
-# ----------------- LOAD GreeksLog -----------------
+# ----------------- LOAD LOGGED GREEKS -----------------
 all_vals = wb.worksheet("GreeksLog").get_all_values()
 if len(all_vals) < 2:
-    st.error("❌ 'GreeksLog' must have a header row and at least one data row.")
+    st.error("❌ 'GreeksLog' must have header + data. Please check your fetch script.")
     st.stop()
-# Determine if header present
 headers = [h.strip().lower() for h in all_vals[0]]
 if headers == REQUIRED_COLUMNS:
     data_rows = all_vals[1:]
 else:
     data_rows = all_vals
 # Build DataFrame
-df_log = pd.DataFrame(data_rows, columns=REQUIRED_COLUMNS)
-# Parse timestamps
-ts = pd.to_datetime(df_log['timestamp'], utc=True)
-try:
-    ts = ts.dt.tz_localize('UTC')
-except Exception:
-    pass
-df_log['timestamp'] = ts.dt.tz_convert(ist)
-# Convert numeric columns
-for col in REQUIRED_COLUMNS[1:]:
-    df_log[col] = pd.to_numeric(df_log[col], errors='coerce')
+_df = pd.DataFrame(data_rows, columns=headers)
+# Parse timestamp
+_df['timestamp'] = pd.to_datetime(_df['timestamp'], utc=True).dt.tz_convert(ist)
+# Convert numeric cols
+type_cols = [c for c in headers if c != 'timestamp']
+for col in type_cols:
+    _df[col] = pd.to_numeric(_df[col], errors='coerce')
+# Raw log DF
+_df_log = _df.copy()
 
 # ----------------- OPEN SNAPSHOT -----------------
-def get_open():
-    # Read existing snapshot
+def get_open_snapshot():
     try:
         vals = wb.worksheet("GreeksOpen").get_all_values()
         if len(vals) >= 2:
@@ -75,69 +56,96 @@ def get_open():
             return ser.drop('timestamp').astype(float)
     except Exception:
         pass
-    # Fallback: first log entry for today
-    today_rows = df_log[df_log['timestamp'].dt.date == now.date()]
+    # fallback to first entry today
+    today_rows = _df_log[_df_log['timestamp'].dt.date == now.date()]
     if today_rows.empty:
         st.error("❌ No 'GreeksLog' entry for today; ensure fetch script ran at open.")
         st.stop()
     base = today_rows.iloc[0]
-    return pd.Series({c: float(base[c]) for c in REQUIRED_COLUMNS[1:]})
-open_vals = get_open()
+    return base.drop('timestamp')
 
-# ----------------- COMPUTE CHANGES -----------------
-# Build list of changes across all logged intervals
-changes_list = []
-for _, row in df_log.iterrows():
-    entry = {"timestamp": row["timestamp"]}
-    for col in REQUIRED_COLUMNS[1:]:
-        # compute delta vs opening baseline
-        entry[f"{col}_change"] = float(row[col]) - float(open_vals[col])
-    changes_list.append(entry)
+open_snapshot = get_open_snapshot()
 
-# Ensure we have data
-if not changes_list:
-    st.error("❌ No interval data available to display.")
-    st.stop()
+# ----------------- CALCULATE CHANGES -----------------
+latest = _df_log.iloc[-1]
+changes = {}
+for col in open_snapshot.index:
+    changes[col] = latest[col] - open_snapshot[col]
 
-# Create DataFrame of changes
-df_changes = pd.DataFrame(changes_list)
-# Format timestamp into IST string
-if pd.api.types.is_datetime64_any_dtype(df_changes['timestamp']):
-    df_changes['timestamp'] = df_changes['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S %Z')
-else:
-    df_changes['timestamp'] = pd.to_datetime(df_changes['timestamp'], utc=True).dt.tz_localize('UTC').dt.tz_convert(ist).dt.strftime('%Y-%m-%d %H:%M:%S %Z')
+# ----------------- SENTIMENT CLASSIFICATION -----------------
+def classify_sentiment(ce_vega, pe_vega, ce_theta, pe_theta):
+    # Vega-based
+    if pe_vega > 0 and ce_vega < 0:
+        sentiment = 'BEARISH'
+    elif ce_vega > 0 and pe_vega < 0:
+        sentiment = 'BULLISH'
+    elif ce_vega > 0 and pe_vega > 0:
+        sentiment = 'RANGE BOUND'
+    else:
+        sentiment = 'VOLATILE'
+    # Theta override
+    if ce_theta < 0 or pe_theta < 0:
+        sentiment = 'VOLATILE'
+    return sentiment
+
+# ----------------- BUILD SUMMARY -----------------
+rows = []
+for prefix, label in [('nifty', 'NIFTY'), ('bn', 'BANKNIFTY')]:
+    ce_d = changes[f'{prefix}_ce_delta']
+    pe_d = changes[f'{prefix}_pe_delta']
+    ce_v = changes[f'{prefix}_ce_vega']
+    pe_v = changes[f'{prefix}_pe_vega']
+    ce_t = changes[f'{prefix}_ce_theta']
+    pe_t = changes[f'{prefix}_pe_theta']
+    sent = classify_sentiment(ce_v, pe_v, ce_t, pe_t)
+    # CE row
+    row_ce = {
+        'Instrument': f"{label} CE",
+        'SENTIMENT': sent,
+        'VEGA': ce_v,
+        'THETA': ce_t,
+        'DELTA': ce_d
+    }
+    # PE row
+    row_pe = {
+        'Instrument': f"{label} PE",
+        'SENTIMENT': sent,
+        'VEGA': pe_v,
+        'THETA': pe_t,
+        'DELTA': pe_d
+    }
+    rows.extend([row_ce, row_pe])
+# Include OI if available
+if any(col.endswith('_oi') for col in headers):
+    for r in rows:
+        pref = 'nifty' if 'NIFTY' in r['Instrument'] and 'BANK' not in r['Instrument'] else 'bn'
+        typ = 'ce' if r['Instrument'].endswith('CE') else 'pe'
+        oi_col = f"{pref}_{typ}_oi"
+        r['OI'] = changes.get(oi_col, None)
+
+summary_df = pd.DataFrame(rows)
 
 # ----------------- DISPLAY -----------------
-def color_positive(v):
-    return 'color: green' if v > 0 else 'color: red' if v < 0 else 'color: white'
+st.title("📈 Greeks Sentiment Tracker")
+st.caption(f"✅ Last updated: {now.strftime('%d-%b-%Y %I:%M:%S %p IST')}")
+st.subheader("Sentiment Summary")
+st.table(summary_df.style.format({c: '{:.2f}' for c in ['VEGA','THETA','DELTA'] if c in summary_df.columns}))
 
-st.subheader("📈 Intraday Greek Changes")
-st.dataframe(
-    df_changes.style.applymap(color_positive, subset=[c for c in df_changes.columns if c.endswith('_change')])
-                   .format({c: '{:.2f}' for c in df_changes.columns if c.endswith('_change')})
-)
-
-# ----------------- DOWNLOAD BUTTON -----------------
-# Export as CSV to avoid missing Excel engines
-import io
-csv_buffer = io.BytesIO()
-csv_buffer.write(df_changes.to_csv(index=False).encode('utf-8'))
-csv_buffer.seek(0)
-
+# ----------------- RAW DATA DOWNLOAD -----------------
+st.subheader("Raw Log Data")
 st.download_button(
-    label="Download intraday data as CSV",
-    data=csv_buffer,
-    file_name=f"greeks_intraday_{now.strftime('%Y%m%d')}.csv",
+    label="Download Full Greeks Log CSV",
+    data=pd.DataFrame._df_log.to_csv(index=False),
+    file_name=f"greeks_log_{now.strftime('%Y%m%d_%H%M%S')}.csv",
     mime='text/csv'
 )
 
 # ----------------- FOOTER & REFRESH -----------------
-st.caption(f"✅ Last updated: {now.strftime('%d-%b-%Y %I:%M:%S %p IST')}")
-st.caption("🔄 Auto-refresh every 1 minute")
-st_autorefresh(interval=60000)
 st.markdown("---")
+st.caption("🔄 Auto-refresh every 1 minute (set to 5 minutes if instability arises)")
+st_autorefresh = st_autorefresh(interval=60000)
 st.markdown(
     "<div style='text-align:center;color:grey;'>"
-    "Made with ❤️ by Prakash Rai in partnership with ChatGPT | Powered by Zerodha APIs"
+    "Made with ❤️ by Prakash Rai | Powered by Zerodha APIs"
     "</div>", unsafe_allow_html=True
 )
