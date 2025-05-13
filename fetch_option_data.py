@@ -1,135 +1,147 @@
-import os
+```python
+#!/usr/bin/env python3
+
 import json
-import time
 import datetime
-from datetime import timedelta
 import pytz
-import pandas as pd
 import numpy as np
-from kiteconnect import KiteConnect
-from oauth2client.service_account import ServiceAccountCredentials
-import gspread
 from scipy.stats import norm
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from kiteconnect import KiteConnect
 
-# -------------------- CONFIG & DATE SELECTION --------------------
-ist = pytz.timezone("Asia/Kolkata")
-now = datetime.datetime.now(ist)
-today = now.date()
+# ---------- CONFIGURATION ----------
+GSHEET_CREDENTIALS_FILE = "credentials.json"
+SHEET_ID = "1RMI8YsExk0pQ-Q1PQ9YYYqRwZ52RKvJcbu-x9yu309k"
+LOG_SHEET_NAME = "GreeksLog"
+OPEN_SHEET_NAME = "GreeksOpen"
+ARCHIVE_SHEET_NAME = "GreeksArchive"
+KITE_CREDENTIALS_FILE = "kite_credentials.json"
+RISK_FREE_RATE = 0.07
+DELTA_MIN = 0.05
+DELTA_MAX = 0.60
+# Archive policy: keep last RETENTION_DAYS days in main sheet
+RETENTION_DAYS = 7
 
-# NSE Holidays for 2025 (update as needed)
-nse_holidays = {
-    datetime.date(2025,1,26), datetime.date(2025,2,26), datetime.date(2025,3,14),
-    datetime.date(2025,3,31), datetime.date(2025,4,10), datetime.date(2025,4,14),
-    datetime.date(2025,4,18), datetime.date(2025,5,1),  datetime.date(2025,8,15),
-    datetime.date(2025,8,27), datetime.date(2025,10,2), datetime.date(2025,10,21),
-    datetime.date(2025,10,22), datetime.date(2025,11,5), datetime.date(2025,12,25)
-}
+# ---------- BLACK-SCHOLES GREEKS ----------
+def bs_greeks(flag, S, K, T, r, sigma):
+    if T <= 0 or sigma <= 0:
+        return 0.0, 0.0, 0.0
+    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    vega = S * norm.pdf(d1) * np.sqrt(T)
+    if flag == 'CE':
+        delta = norm.cdf(d1)
+        theta = (-S * norm.pdf(d1) * sigma / (2 * np.sqrt(T))
+                 - r * K * np.exp(-r * T) * norm.cdf(d1))
+    else:
+        delta = -norm.cdf(-d1)
+        theta = (-S * norm.pdf(d1) * sigma / (2 * np.sqrt(T))
+                 + r * K * np.exp(-r * T) * norm.cdf(-d1))
+    return float(delta), float(vega), float(theta)
 
-def get_last_trading_day(d, holidays):
-    ld = d
-    while ld.weekday() >= 5 or ld in holidays:
-        ld -= timedelta(days=1)
-    return ld
+# ---------- MAIN ----------
+def main():
+    # Load Kite credentials
+    with open(KITE_CREDENTIALS_FILE) as f:
+        kc = json.load(f)
+    kite = KiteConnect(api_key=kc['api_key'])
+    kite.set_access_token(kc['access_token'])
 
-target_day = get_last_trading_day(today, nse_holidays)
-print(f"ℹ️ Using trading date: {target_day}")
+    # Google Sheets setup
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name(GSHEET_CREDENTIALS_FILE, scope)
+    client = gspread.authorize(creds)
+    book = client.open_by_key(SHEET_ID)
+    log_ws = book.worksheet(LOG_SHEET_NAME)
+    open_ws = book.worksheet(OPEN_SHEET_NAME)
 
-# snapshot at open only
-is_open_snapshot = (now.strftime("%H:%M") == "09:15" and target_day == today)
+    # Ensure log sheet has headers
+    headers = [
+        "timestamp",
+        "nifty_ce_delta","nifty_ce_vega","nifty_ce_theta",
+        "nifty_pe_delta","nifty_pe_vega","nifty_pe_theta",
+        "bn_ce_delta","bn_ce_vega","bn_ce_theta",
+        "bn_pe_delta","bn_pe_vega","bn_pe_theta"
+    ]
+    existing = log_ws.get_all_values()
+    if not existing or existing[0] != headers:
+        log_ws.clear()
+        log_ws.append_row(headers)
 
-# -------------------- LOAD SERVICE-ACCOUNT CREDS --------------------
-raw = os.environ.get("GCREDS") or os.environ.get("gcreds")
-if not raw:
-    raise RuntimeError("❌ GCREDS not found in environment.")
-try:
-    gcreds = json.loads(raw)
-except json.JSONDecodeError as e:
-    raise RuntimeError(f"❌ GCREDS is not valid JSON: {e}")
+    # Prepare Greeks aggregation
+    instruments = kite.instruments("NFO")
+    underlyings = {'nifty': 'NIFTY', 'bn': 'BANKNIFTY'}
+    results = {f"{k}_{o}_{m}": 0.0
+               for k in underlyings for o in ['ce','pe'] for m in ['delta','vega','theta']}
 
-# -------------------- GOOGLE SHEETS AUTH --------------------
-scope = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive"
-]
-service_account = gcreds.get("client_email", "<unknown>")
-print(f"🔐 Using service account: {service_account}")
-creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
-gc = gspread.authorize(creds)
+    # Timestamp
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.datetime.now(ist)
 
-# Open workbooks
-try:
-    token_wb = gc.open_by_key(os.environ["TOKEN_SHEET_ID"])
-except Exception as e:
-    raise RuntimeError(f"❌ Cannot open TOKEN_SHEET_ID: {e} - share with {service_account}")
-try:
-    data_wb = gc.open_by_key(os.environ["GREEKS_SHEET_ID"])
-except Exception as e:
-    raise RuntimeError(f"❌ Cannot open GREEKS_SHEET_ID: {e} - share with {service_account}")
+    # Underlying LTP
+    ltp_data = kite.ltp(*[f"NSE:{sym}" for sym in underlyings.values()])
 
-# Read Zeodha tokens
-t_cfg = token_wb.worksheet("Sheet1")
-api_key = t_cfg.acell("A1").value.strip()
-access_token = t_cfg.acell("C1").value.strip()
+    # Compute Greeks
+    for key, sym in underlyings.items():
+        S = ltp_data[f"NSE:{sym}"]["last_price"]
+        opts = [i for i in instruments if i['name']==sym and i['segment']=='NFO-OPT']
+        for inst in opts:
+            flag = inst['instrument_type']
+            K = inst['strike']
+            exp = inst['expiry']
+            expiry_dt = datetime.datetime.combine(exp, datetime.time(15,30), tzinfo=ist)
+            T = (expiry_dt.astimezone(pytz.UTC) - now.astimezone(pytz.UTC)).total_seconds() / (365*24*3600)
+            quote = kite.quote(f"NFO:{inst['instrument_token']}")[f"NFO:{inst['instrument_token']}"]
+            iv = quote.get('implied_volatility',0.0)/100.0
+            delta, vega, theta = bs_greeks(flag, S, K, T, RISK_FREE_RATE, iv)
+            if DELTA_MIN <= abs(delta) <= DELTA_MAX:
+                results[f"{key}_{flag.lower()}_delta"] += delta
+                results[f"{key}_{flag.lower()}_vega"]  += vega
+                results[f"{key}_{flag.lower()}_theta"] += theta
 
-# Prepare worksheets
-log_ws = data_wb.worksheet("GreeksLog")
-open_ws = data_wb.worksheet("GreeksOpen")
+    # Build and append row
+    row = [now.strftime('%Y-%m-%d %H:%M:%S')]
+    for k in ['nifty','bn']:
+        for o in ['ce','pe']:
+            row += [round(results[f"{k}_{o}_delta"],4),
+                    round(results[f"{k}_{o}_vega"],2),
+                    round(results[f"{k}_{o}_theta"],2)]
+    log_ws.append_row(row)
 
-# -------------------- KITE INITIALIZATION & VALIDATION --------------------
-def kite_call(fn, *args, retries=3, delay=2, **kwargs):
-    for i in range(retries):
+    # Archive based on date: move rows older than RETENTION_DAYS to archive
+    cutoff_date = (now - datetime.timedelta(days=RETENTION_DAYS)).date()
+    all_vals = log_ws.get_all_values()  # includes header
+    # Identify rows to archive (index and row data)
+    to_archive = []
+    for idx, row_vals in enumerate(all_vals[1:], start=2):  # skip header
         try:
-            return fn(*args, **kwargs)
-        except Exception as e:
-            print(f"⚠️ Kite API error: {e} (retry {i+1}/{retries})")
-            time.sleep(delay)
-    raise RuntimeError("❌ Kite API failed after retries")
+            row_date = datetime.datetime.strptime(row_vals[0], '%Y-%m-%d %H:%M:%S').date()
+        except Exception:
+            continue
+        if row_date < cutoff_date:
+            to_archive.append((idx, row_vals))
+    if to_archive:
+        # Ensure archive sheet exists
+        try:
+            archive_ws = book.worksheet(ARCHIVE_SHEET_NAME)
+        except gspread.WorksheetNotFound:
+            archive_ws = book.add_worksheet(ARCHIVE_SHEET_NAME, rows=1, cols=len(headers))
+            archive_ws.append_row(headers)
+        # Append rows to archive and delete from main (reverse order)
+        for _, data_row in to_archive:
+            archive_ws.append_row(data_row)
+        for idx, _ in sorted(to_archive, reverse=True):
+            log_ws.delete_row(idx)
 
-kite = KiteConnect(api_key=api_key)
-kite.set_access_token(access_token)
-spot_data = kite_call(kite.ltp, ["NSE:NIFTY 50"])
-spot_price = spot_data.get("NSE:NIFTY 50", {}).get("last_price")
-if not spot_price:
-    raise RuntimeError("❌ Invalid API Key or Access Token.")
-print(f"✅ Spot price: {spot_price}")
+    # Open snapshot logic
+    vals = open_ws.get_all_values()
+    if len(vals) < 2 or not vals[1][0].startswith(now.strftime('%Y-%m-%d')):
+        open_ws.clear()
+        open_ws.append_row(headers)
+        open_ws.append_row(row)
 
-# -------------------- FETCH & COMPUTE GREEKS --------------------
-insts = pd.DataFrame(kite_call(kite.instruments, "NFO"))
-nifty = insts[(insts["name"]=="NIFTY") & (insts["segment"]=="NFO-OPT")]
-exp = sorted(nifty["expiry"].unique())
-ne = next(e for e in exp if pd.to_datetime(e).date() >= target_day)
-ce = nifty[(nifty["expiry"]==ne) & (nifty["instrument_type"]=="CE")]
-pe = nifty[(nifty["expiry"]==ne) & (nifty["instrument_type"]=="PE")]
+    print(f"Logged Greeks at {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
-ce_ltp = kite_call(kite.ltp, ce["instrument_token"].astype(int).tolist())
-pe_ltp = kite_call(kite.ltp, pe["instrument_token"].astype(int).tolist())
-ce["ltp"] = ce["instrument_token"].apply(lambda x: ce_ltp.get(str(x), {}).get("last_price", 0))
-pe["ltp"] = pe["instrument_token"].apply(lambda x: pe_ltp.get(str(x), {}).get("last_price", 0))
-
-T, r, sigma = 1/12, 0.06, 0.14
-
-def bs_greeks(row):
-    S, K = spot_price, row["strike"]
-    d1 = (np.log(S/K) + (r + 0.5*sigma**2)*T) / (sigma*np.sqrt(T))
-    delta = norm.cdf(d1) if row["instrument_type"]=="CE" else -norm.cdf(-d1)
-    vega = S * norm.pdf(d1) * np.sqrt(T) / 100
-    theta = -S * norm.pdf(d1) * sigma / (2 * np.sqrt(T)) / 365
-    return delta, vega, theta
-
-ce[["delta","vega","theta"]] = ce.apply(bs_greeks, axis=1, result_type="expand")
-pe[["delta","vega","theta"]] = pe.apply(bs_greeks, axis=1, result_type="expand")
-
-low, high = 0.05, 0.6
-sum_ce = ce.query("delta>=@low and delta<=@high")["delta"].sum()
-sum_pe = pe.query("abs(delta)>=@low and abs(delta)<=@high")["delta"].sum()
-sum_cv = ce["vega"].sum(); sum_pv = pe["vega"].sum()
-sum_ct = ce["theta"].sum(); sum_pt = pe["theta"].sum()
-
-row = [now.isoformat(), sum_ce, sum_pe, sum_cv, sum_pv, sum_ct, sum_pt]
-log_ws.append_row(row)
-print("✅ Logged to GreeksLog")
-
-if is_open_snapshot:
-    open_ws.clear()
-    open_ws.append_row(row)
-    print("📌 Saved open snapshot to GreeksOpen")
+if __name__ == '__main__':
+    main()
+```
