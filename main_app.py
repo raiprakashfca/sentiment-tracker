@@ -11,21 +11,24 @@ import fetch_option_data  # ensure this module is importable
 st.set_page_config(page_title="📈 Greeks Sentiment Tracker", layout="wide")
 
 # ---------- SECRETS & CONSTANTS ----------
-gcreds = st.secrets["GCREDS"]
-greeks_sheet_id = st.secrets["GREEKS_SHEET_ID"]
-token_sheet_id = st.secrets["TOKEN_SHEET_ID"]
-LOG_WS = "GreeksLog"
-OPEN_WS = "GreeksOpen"
-# expected header
-HEADER = [
-    "timestamp",
-    "nifty_ce_delta", "nifty_ce_vega", "nifty_ce_theta",
-    "nifty_pe_delta", "nifty_pe_vega", "nifty_pe_theta",
-    "bn_ce_delta",    "bn_ce_vega",    "bn_ce_theta",
-    "bn_pe_delta",    "bn_pe_vega",    "bn_pe_theta"
-]
+creds_json = st.secrets.get("GCREDS") or st.secrets.get("gcreds")
+if not creds_json:
+    st.error("Service account credentials (GCREDS) not found. Please configure your secret.")
+    st.stop()
+greeks_sheet_id = st.secrets.get("GREEKS_SHEET_ID") or st.secrets.get("greeks_sheet_id")
+if not greeks_sheet_id:
+    st.error("GREEKS_SHEET_ID secret not found.")
+    st.stop()
+token_sheet_id = st.secrets.get("TOKEN_SHEET_ID") or st.secrets.get("token_sheet_id")
+if not token_sheet_id:
+    st.error("TOKEN_SHEET_ID secret not found.")
+    st.stop()
 
 # ---------- AUTHENTICATE GOOGLE SHEETS ----------
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
+client = gspread.authorize(creds)
+wb = client.open_by_key(greeks_sheet_id)
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 client = gspread.authorize(creds)
