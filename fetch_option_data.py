@@ -7,9 +7,10 @@ from scipy.stats import norm
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from kiteconnect import KiteConnect
+from gspread.exceptions import WorksheetNotFound
 
 # ---------- CONFIGURATION ----------
-GSHEET_CREDENTIALS_FILE = "credentials.json"  # fallback
+GSHEET_CREDENTIALS_FILE = "credentials.json"
 LOG_SHEET_ID = "1RMI8YsExk0pQ-Q1PQ9YYYqRwZ52RKvJcbu-x9yu309k"
 TOKEN_SHEET_ID = "1mANuCob4dz3jvjigeO1km96vBzZHr-4ZflZEXxR8-qU"
 LOG_SHEET_NAME = "GreeksLog"
@@ -43,8 +44,7 @@ def main():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_json = os.getenv('GCREDS')
     if creds_json:
-        creds_dict = json.loads(creds_json)
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(creds_json), scope)
     elif os.path.exists(GSHEET_CREDENTIALS_FILE):
         creds = ServiceAccountCredentials.from_json_keyfile_name(GSHEET_CREDENTIALS_FILE, scope)
     else:
@@ -53,14 +53,18 @@ def main():
         )
     client = gspread.authorize(creds)
 
-    # Fetch Kite credentials from Google Sheet 'ZerodhaTokenStore'
+    # Fetch Kite credentials from Google Sheet 'ZerodhaTokenStore' (with fallback)
     token_book = client.open_by_key(TOKEN_SHEET_ID)
-    token_ws = token_book.worksheet("ZerodhaTokenStore")
+    try:
+        token_ws = token_book.worksheet("ZerodhaTokenStore")
+    except WorksheetNotFound:
+        token_ws = token_book.get_worksheet(0)
+        print(f"Warning: 'ZerodhaTokenStore' worksheet not found. Using first sheet: {token_ws.title}")
     api_key = token_ws.acell('A1').value
     access_token = token_ws.acell('C1').value
     if not api_key or not access_token:
         raise ValueError(
-            "Missing Kite credentials in 'ZerodhaTokenStore' sheet (A1=API Key; C1=Access Token)."
+            "Missing Kite credentials in sheet (A1=API Key; C1=Access Token)."
         )
     kite = KiteConnect(api_key=api_key)
     kite.set_access_token(access_token)
@@ -133,7 +137,7 @@ def main():
     if to_archive:
         try:
             arc_ws = book.worksheet(ARCHIVE_SHEET_NAME)
-        except gspread.WorksheetNotFound:
+        except WorksheetNotFound:
             arc_ws = book.add_worksheet(ARCHIVE_SHEET_NAME, rows=1, cols=len(headers))
             arc_ws.append_row(headers)
         for _, r in to_archive:
