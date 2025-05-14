@@ -41,10 +41,6 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 wb = client.open_by_key(greeks_sheet_id)
 
-scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(creds_json), scope)
-client = gspread.authorize(creds)
-wb = client.open_by_key(greeks_sheet_id)
 
 # ---------- ENSURE HEADER & INITIAL DATA ----------
 log_sheet = wb.worksheet(LOG_WS)
