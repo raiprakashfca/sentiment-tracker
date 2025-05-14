@@ -86,13 +86,69 @@ def main():
     # Fetch instruments once
     instruments = kite.instruments("NFO")
 
-    # Use correct index symbols for LTP
-    underlyings = {
-        'nifty': 'NIFTY 50',    # correct index name in LTP
+        # Use correct index symbols for LTP and instrument filtering
+    instrument_names = {
+        'nifty': 'NIFTY',
         'bn':    'BANKNIFTY'
+    }
+    ltp_symbol_map = {
+        'nifty': ['NIFTY 50', 'NIFTY'],
+        'bn':    ['BANKNIFTY']
     }
 
     # Prepare aggregation
+    results = {f"{k}_{o}_{m}": 0.0
+               for k in instrument_names for o in ['ce','pe'] for m in ['delta','vega','theta']}
+
+    # Timestamp IST
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.datetime.now(ist)
+
+    # Fetch underlying LTPs for all possible symbols
+    ltp_keys = []
+    for syms in ltp_symbol_map.values():
+        for sym in syms:
+            ltp_keys.append(f"NSE:{sym}")
+    ltp_data = kite.ltp(*ltp_keys)
+
+    # Compute Greeks
+    for key in instrument_names:
+        # pick first available LTP symbol
+        sym = None
+        for cand in ltp_symbol_map[key]:
+            if f"NSE:{cand}" in ltp_data:
+                sym = cand
+                break
+        if not sym:
+            print(f"Warning: No LTP data for {key} ({ltp_symbol_map[key]}), skipping.")
+            continue
+        ltp_key = f"NSE:{sym}"
+        S = ltp_data[ltp_key]['last_price']
+        # Filter options for this underlying instrument name
+        inst_name = instrument_names[key]
+        opts = [i for i in instruments if i['name']==inst_name and i['segment']=='NFO-OPT']
+        for inst in opts:
+            flag = inst['instrument_type']  # 'CE' or 'PE'
+            K = inst['strike']
+            expiry = datetime.datetime.combine(inst['expiry'], datetime.time(15,30), tzinfo=ist)
+            T = (expiry.astimezone(pytz.UTC) - now.astimezone(pytz.UTC)).total_seconds()/(365*24*3600)
+            qdata = kite.quote(f"NFO:{inst['instrument_token']}\")[f"NFO:{inst['instrument_token']}"]
+            iv = qdata.get('implied_volatility',0)/100.0
+            # Black-Scholes
+            d1 = (np.log(S/K)+(RISK_FREE_RATE+0.5*iv*iv)*T)/(iv*np.sqrt(T)) if T>0 and iv>0 else None
+            if d1 is None:
+                continue
+            d2 = d1 - iv*np.sqrt(T)
+            delta = (norm.cdf(d1) if flag=='CE' else -norm.cdf(-d1))
+            vega = S*norm.pdf(d1)*np.sqrt(T)
+            theta = ((-S*norm.pdf(d1)*iv/(2*np.sqrt(T)) - RISK_FREE_RATE*K*np.exp(-RISK_FREE_RATE*T)*norm.cdf(d1))
+                     if flag=='CE' else
+                     (-S*norm.pdf(d1)*iv/(2*np.sqrt(T))+RISK_FREE_RATE*K*np.exp(-RISK_FREE_RATE*T)*norm.cdf(-d1)))
+            # Filter by delta
+            if abs(delta)>=DELTA_MIN and abs(delta)<=DELTA_MAX:
+                results[f"{key}_{flag.lower()}_delta"] += delta
+                results[f"{key}_{flag.lower()}_vega"]  += vega
+                results[f"{key}_{flag.lower()}_theta"] += theta
     results = {f"{k}_{o}_{m}": 0.0
                for k in underlyings for o in ['ce','pe'] for m in ['delta','vega','theta']}
 
