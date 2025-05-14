@@ -1,8 +1,8 @@
+import os
 import streamlit as st
 import pandas as pd
 import datetime
 import pytz
-env = __import__('os')
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from streamlit_autorefresh import st_autorefresh
@@ -11,29 +11,22 @@ import fetch_option_data  # ensure this module is importable
 # ---------- PAGE CONFIGURATION ----------
 st.set_page_config(page_title="📈 Greeks Sentiment Tracker", layout="wide")
 
-# ---------- SECRETS & CONSTANTS ----------
-# Load secrets from Streamlit secrets or environment variables
-try:
-    creds_json = st.secrets["GCREDS"]
-except KeyError:
-    creds_json = None
+# ---------- ENVIRONMENT & CONSTANTS ----------
+# Read service account JSON from environment variable
+creds_json = os.getenv("GCREDS_JSON") or os.getenv("GCREDS")
 if not creds_json:
-    creds_json = env.getenv("GCREDS_JSON")
-    if creds_json:
-        creds_json = env.json.loads(creds_json)
-if not creds_json:
-    st.error("Service account credentials not found. Please add GCREDS to Streamlit secrets or set GCREDS_JSON env var.")
+    st.error("Service account credentials not found. Please set GCREDS_JSON or GCREDS as an environment variable.")
     st.stop()
-# Sheet IDs
-greeks_sheet_id = st.secrets.get("GREEKS_SHEET_ID") or env.getenv("GREEKS_SHEET_ID")
-token_sheet_id  = st.secrets.get("TOKEN_SHEET_ID")  or env.getenv("TOKEN_SHEET_ID")
+# Read sheet IDs from environment
+greeks_sheet_id = os.getenv("GREEKS_SHEET_ID")
+token_sheet_id  = os.getenv("TOKEN_SHEET_ID")
 if not greeks_sheet_id or not token_sheet_id:
-    st.error("GREEKS_SHEET_ID and TOKEN_SHEET_ID must be set in Streamlit secrets or env vars.")
+    st.error("GREEKS_SHEET_ID and TOKEN_SHEET_ID must be set as environment variables.")
     st.stop()
 
-LOG_WS    = "GreeksLog"
-OPEN_WS   = "GreeksOpen"
-HEADER    = [
+LOG_WS  = "GreeksLog"
+OPEN_WS = "GreeksOpen"
+HEADER  = [
     "timestamp",
     "nifty_ce_delta","nifty_ce_vega","nifty_ce_theta",
     "nifty_pe_delta","nifty_pe_vega","nifty_pe_theta",
@@ -43,7 +36,7 @@ HEADER    = [
 
 # ---------- AUTHENTICATE GOOGLE SHEETS ----------
 scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
+creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(creds_json), scope)
 client = gspread.authorize(creds)
 wb = client.open_by_key(greeks_sheet_id)
 
@@ -63,7 +56,7 @@ if len(vals) < 2:
     st.error("❌ 'GreeksLog' requires at least one data row after header.")
     st.stop()
 headers = vals[0]
-rows = vals[1:]
+rows    = vals[1:]
 
 # ---------- LOAD DATAFRAME ----------
 df = pd.DataFrame(rows, columns=headers)
@@ -74,14 +67,14 @@ for col in headers[1:]:
 
 # ---------- OPEN SNAPSHOT ----------
 open_sheet = wb.worksheet(OPEN_WS)
-open_vals = open_sheet.get_all_values()
+open_vals  = open_sheet.get_all_values()
 if len(open_vals) >= 2 and open_vals[0] == HEADER:
     open_series = pd.Series(open_vals[1], index=open_vals[0]).drop('timestamp').astype(float)
 else:
     open_series = df.iloc[0].drop('timestamp').astype(float)
 
 # ---------- CALCULATE CHANGES ----------
-latest = df.iloc[-1]
+latest  = df.iloc[-1]
 changes = {col: latest[col] - open_series[col] for col in open_series.index}
 
 # ---------- SENTIMENT LOGIC ----------
@@ -100,20 +93,20 @@ def classify_sentiment(ce_v, pe_v, ce_t, pe_t):
 
 # ---------- BUILD SUMMARY ----------
 rows_out = []
-today = datetime.datetime.now(pytz.timezone('Asia/Kolkata'))
+today    = datetime.datetime.now(pytz.timezone('Asia/Kolkata'))
 for key, label in [('nifty','NIFTY'),('bn','BANKNIFTY')]:
-    ce_d,ce_v,ce_t = changes[f"{key}_ce_delta"],changes[f"{key}_ce_vega"],changes[f"{key}_ce_theta"]
-    pe_d,pe_v,pe_t = changes[f"{key}_pe_delta"],changes[f"{key}_pe_vega"],changes[f"{key}_pe_theta"]
-    sent = classify_sentiment(ce_v,pe_v,ce_t,pe_t)
-    for opt,d,v,t in [('CE',ce_d,ce_v,ce_t),('PE',pe_d,pe_v,pe_t)]:
+    ce_d,ce_v,ce_t = changes[f"{key}_ce_delta"], changes[f"{key}_ce_vega"], changes[f"{key}_ce_theta"]
+    pe_d,pe_v,pe_t = changes[f"{key}_pe_delta"], changes[f"{key}_pe_vega"], changes[f"{key}_pe_theta"]
+    sent = classify_sentiment(ce_v, pe_v, ce_t, pe_t)
+    for opt, d, v, t in [('CE', ce_d, ce_v, ce_t), ('PE', pe_d, pe_v, pe_t)]:
         rows_out.append({'Instrument':f"{label} {opt}",'SENTIMENT':sent,'DELTA':d,'VEGA':v,'THETA':t})
 oi_cols=[c for c in headers if c.endswith('_oi')]
 if oi_cols:
     for e in rows_out:
-        p='nifty' if 'NIFTY' in e['Instrument'] and 'BANKNIFTY' not in e['Instrument'] else 'bn'
-        o='ce' if e['Instrument'].endswith('CE') else 'pe'
-        e['OI']=changes.get(f"{p}_{o}_oi")
-summary_df=pd.DataFrame(rows_out)
+        p = 'nifty' if 'NIFTY' in e['Instrument'] and 'BANKNIFTY' not in e['Instrument'] else 'bn'
+        o = 'ce' if e['Instrument'].endswith('CE') else 'pe'
+        e['OI'] = changes.get(f"{p}_{o}_oi")
+summary_df = pd.DataFrame(rows_out)
 
 # ---------- DISPLAY ----------
 st.title("📈 Greeks Sentiment Tracker")
