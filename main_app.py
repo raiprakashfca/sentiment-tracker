@@ -14,9 +14,9 @@ st.set_page_config(page_title="📈 Greeks Sentiment Tracker", layout="wide")
 # ---------- STREAMLIT SECRETS & CONSTANTS ----------
 # Load credentials and IDs from Streamlit secrets
 try:
-    creds_dict = st.secrets["gcreds"]
+    creds_dict = st.secrets["GCREDS"]
 except KeyError:
-    st.error("Service account credentials not found. Please define [gcreds] in Streamlit secrets.")
+    st.error("Service account credentials not found. Please define [GCREDS] in Streamlit secrets.")
     st.stop()
 try:
     greeks_sheet_id = st.secrets["GREEKS_SHEET_ID"]
@@ -29,13 +29,18 @@ LOG_WS  = "GreeksLog"
 OPEN_WS = "GreeksOpen"
 HEADER  = [
     "timestamp",
-    "nifty_ce_delta","nifty_ce_vega","nifty_ce_theta",
-    "nifty_pe_delta","nifty_pe_vega","nifty_pe_theta",
-    "bn_ce_delta",   "bn_ce_vega",   "bn_ce_theta",
-    "bn_pe_delta",   "bn_pe_vega",   "bn_pe_theta"
+    "nifty_ce_delta", "nifty_ce_vega", "nifty_ce_theta",
+    "nifty_pe_delta", "nifty_pe_vega", "nifty_pe_theta",
+    "bn_ce_delta",    "bn_ce_vega",    "bn_ce_theta",
+    "bn_pe_delta",    "bn_pe_vega",    "bn_pe_theta"
 ]
 
 # ---------- AUTHENTICATE GOOGLE SHEETS ----------
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+client = gspread.authorize(creds)
+wb = client.open_by_key(greeks_sheet_id)
+
 scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(creds_json), scope)
 client = gspread.authorize(creds)
