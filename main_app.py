@@ -5,147 +5,139 @@ import pytz
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from streamlit_autorefresh import st_autorefresh
+import fetch_option_data  # ensure this module is importable
 
-# ----------------- CONFIG -----------------
-REQUIRED_COLUMNS = [
-    'timestamp',
-    'nifty_ce_delta', 'nifty_pe_delta', 'nifty_ce_vega', 'nifty_pe_vega', 'nifty_ce_theta', 'nifty_pe_theta',
-    'bn_ce_delta',    'bn_pe_delta',    'bn_ce_vega',    'bn_pe_vega',    'bn_ce_theta',    'bn_pe_theta'
+# ---------- PAGE CONFIGURATION ----------
+st.set_page_config(page_title="📈 Greeks Sentiment Tracker", layout="wide")
+
+# ---------- CONSTANTS ----------
+SHEET_ID = "1RMI8YsExk0pQ-Q1PQ9YYYqRwZ52RKvJcbu-x9yu309k"
+LOG_WS = "GreeksLog"
+OPEN_WS = "GreeksOpen"
+# Define expected header row
+HEADER = [
+    "timestamp",
+    "nifty_ce_delta", "nifty_ce_vega", "nifty_ce_theta",
+    "nifty_pe_delta", "nifty_pe_vega", "nifty_pe_theta",
+    "bn_ce_delta",    "bn_ce_vega",    "bn_ce_theta",
+    "bn_pe_delta",    "bn_pe_vega",    "bn_pe_theta"
 ]
 
-# ----------------- PAGE SETUP -----------------
-st.set_page_config(page_title="📈 Sentiment Tracker", layout="wide")
-ist = pytz.timezone("Asia/Kolkata")
-now = datetime.datetime.now(ist)
-
-# ----------------- AUTHENTICATION -----------------
-scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
-raw = st.secrets.get("GCREDS") or st.secrets.get("gcreds")
-creds = ServiceAccountCredentials.from_json_keyfile_dict(raw, scope)
-gc = gspread.authorize(creds)
-sheet_id = st.secrets.get("GREEKS_SHEET_ID")
-wb = gc.open_by_key(sheet_id)
-
-# ----------------- LOAD LOGGED GREEKS -----------------
-all_vals = wb.worksheet("GreeksLog").get_all_values()
-if len(all_vals) < 2:
-    st.error("❌ 'GreeksLog' must have header + data. Please check your fetch script.")
-    st.stop()
-headers = [h.strip().lower() for h in all_vals[0]]
-if headers == REQUIRED_COLUMNS:
-    data_rows = all_vals[1:]
+# ---------- AUTHENTICATION ----------
+# Google Sheets auth using service account JSON from GCREDS or file
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds_json = st.secrets.get("GCREDS")
+if creds_json:
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
+elif st.secrets.get("GSHEET_CREDENTIALS_FILE"):
+    creds = ServiceAccountCredentials.from_json_keyfile_name(
+        st.secrets["GSHEET_CREDENTIALS_FILE"], scope)
 else:
-    data_rows = all_vals
-# Build DataFrame
-_df = pd.DataFrame(data_rows, columns=headers)
-# Parse timestamp
-_df['timestamp'] = pd.to_datetime(_df['timestamp'], utc=True).dt.tz_convert(ist)
-# Convert numeric cols
-type_cols = [c for c in headers if c != 'timestamp']
-for col in type_cols:
-    _df[col] = pd.to_numeric(_df[col], errors='coerce')
-# Raw log DF
-_df_log = _df.copy()
+    st.error("Service account credentials not found. Please set GCREDS secret.")
+    st.stop()
+client = gspread.authorize(creds)
+wb = client.open_by_key(SHEET_ID)
 
-# ----------------- OPEN SNAPSHOT -----------------
-def get_open_snapshot():
+# ---------- ENSURE HEADER & INITIAL DATA ----------
+log_sheet = wb.worksheet(LOG_WS)
+vals = log_sheet.get_all_values()
+# If header missing or incorrect
+if not vals or vals[0] != HEADER:
+    log_sheet.clear()
+    log_sheet.append_row(HEADER)
+    # Trigger initial logging
     try:
-        vals = wb.worksheet("GreeksOpen").get_all_values()
-        if len(vals) >= 2:
-            ser = pd.Series(vals[1], index=vals[0])
-            return ser.drop('timestamp').astype(float)
-    except Exception:
-        pass
-    # fallback to first entry today
-    today_rows = _df_log[_df_log['timestamp'].dt.date == now.date()]
-    if today_rows.empty:
-        st.error("❌ No 'GreeksLog' entry for today; ensure fetch script ran at open.")
+        fetch_option_data.log_greeks()
+    except Exception as e:
+        st.error(f"Failed to log initial data: {e}")
         st.stop()
-    base = today_rows.iloc[0]
-    return base.drop('timestamp')
+    vals = log_sheet.get_all_values()
+# Now ensure at least one data row exists
+if len(vals) < 2:
+    st.error("❌ 'GreeksLog' must have a header row and at least one data row.")
+    st.stop()
+headers = vals[0]
+rows = vals[1:]
 
-open_snapshot = get_open_snapshot()
+# ---------- LOAD DATAFRAME ----------
+df = pd.DataFrame(rows, columns=headers)
+# parse timestamps
+df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S')
+df['timestamp'] = df['timestamp'].dt.tz_localize('UTC').dt.tz_convert('Asia/Kolkata')
+# convert numeric cols
+for col in headers[1:]:
+    df[col] = pd.to_numeric(df[col], errors='coerce')
 
-# ----------------- CALCULATE CHANGES -----------------
-latest = _df_log.iloc[-1]
-changes = {}
-for col in open_snapshot.index:
-    changes[col] = latest[col] - open_snapshot[col]
+# ---------- OPEN SNAPSHOT ----------
+open_sheet = wb.worksheet(OPEN_WS)
+open_vals = open_sheet.get_all_values()
+if len(open_vals) >= 2 and open_vals[0] == HEADER:
+    open_series = pd.Series(open_vals[1], index=open_vals[0]).drop('timestamp').astype(float)
+else:
+    first = df.iloc[0]
+    open_series = first.drop('timestamp').astype(float)
 
-# ----------------- SENTIMENT CLASSIFICATION -----------------
-def classify_sentiment(ce_vega, pe_vega, ce_theta, pe_theta):
-    # Vega-based
-    if pe_vega > 0 and ce_vega < 0:
-        sentiment = 'BEARISH'
-    elif ce_vega > 0 and pe_vega < 0:
-        sentiment = 'BULLISH'
-    elif ce_vega > 0 and pe_vega > 0:
-        sentiment = 'RANGE BOUND'
+# ---------- CALCULATE CHANGES ----------
+latest = df.iloc[-1]
+changes = {col: latest[col] - open_series[col] for col in open_series.index}
+
+# ---------- SENTIMENT CLASSIFICATION ----------
+def classify_sentiment(ce_v, pe_v, ce_t, pe_t):
+    if pe_v > 0 and ce_v < 0:
+        s = 'BEARISH'
+    elif ce_v > 0 and pe_v < 0:
+        s = 'BULLISH'
+    elif ce_v > 0 and pe_v > 0:
+        s = 'RANGE BOUND'
     else:
-        sentiment = 'VOLATILE'
-    # Theta override
-    if ce_theta < 0 or pe_theta < 0:
-        sentiment = 'VOLATILE'
-    return sentiment
+        s = 'VOLATILE'
+    if ce_t < 0 or pe_t < 0:
+        s = 'VOLATILE'
+    return s
 
-# ----------------- BUILD SUMMARY -----------------
-rows = []
-for prefix, label in [('nifty', 'NIFTY'), ('bn', 'BANKNIFTY')]:
-    ce_d = changes[f'{prefix}_ce_delta']
-    pe_d = changes[f'{prefix}_pe_delta']
-    ce_v = changes[f'{prefix}_ce_vega']
-    pe_v = changes[f'{prefix}_pe_vega']
-    ce_t = changes[f'{prefix}_ce_theta']
-    pe_t = changes[f'{prefix}_pe_theta']
-    sent = classify_sentiment(ce_v, pe_v, ce_t, pe_t)
-    # CE row
-    row_ce = {
-        'Instrument': f"{label} CE",
-        'SENTIMENT': sent,
-        'VEGA': ce_v,
-        'THETA': ce_t,
-        'DELTA': ce_d
-    }
-    # PE row
-    row_pe = {
-        'Instrument': f"{label} PE",
-        'SENTIMENT': sent,
-        'VEGA': pe_v,
-        'THETA': pe_t,
-        'DELTA': pe_d
-    }
-    rows.extend([row_ce, row_pe])
-# Include OI if available
-if any(col.endswith('_oi') for col in headers):
-    for r in rows:
-        pref = 'nifty' if 'NIFTY' in r['Instrument'] and 'BANK' not in r['Instrument'] else 'bn'
-        typ = 'ce' if r['Instrument'].endswith('CE') else 'pe'
-        oi_col = f"{pref}_{typ}_oi"
-        r['OI'] = changes.get(oi_col, None)
+# ---------- BUILD SUMMARY ----------
+rows_out = []
+today = datetime.datetime.now(pytz.timezone('Asia/Kolkata'))
+for key, label in [('nifty', 'NIFTY'), ('bn', 'BANKNIFTY')]:
+    ce_d = changes[f"{key}_ce_delta"]
+    ce_v = changes[f"{key}_ce_vega"]
+    ce_t = changes[f"{key}_ce_theta"]
+    pe_d = changes[f"{key}_pe_delta"]
+    pe_v = changes[f"{key}_pe_vega"]
+    pe_t = changes[f"{key}_pe_theta"]
+    sentiment = classify_sentiment(ce_v, pe_v, ce_t, pe_t)
+    for opt, d, v, t in [('CE', ce_d, ce_v, ce_t), ('PE', pe_d, pe_v, pe_t)]:
+        rows_out.append({
+            'Instrument': f"{label} {opt}",
+            'SENTIMENT': sentiment,
+            'DELTA': d,
+            'VEGA': v,
+            'THETA': t
+        })
+oi_cols = [c for c in headers if c.endswith('_oi')]
+if oi_cols:
+    for entry in rows_out:
+        pref = 'nifty' if 'NIFTY' in entry['Instrument'] and 'BANKNIFTY' not in entry['Instrument'] else 'bn'
+        opt = 'ce' if entry['Instrument'].endswith('CE') else 'pe'
+        entry['OI'] = changes.get(f"{pref}_{opt}_oi")
+summary_df = pd.DataFrame(rows_out)
 
-summary_df = pd.DataFrame(rows)
-
-# ----------------- DISPLAY -----------------
+# ---------- DISPLAY ----------
 st.title("📈 Greeks Sentiment Tracker")
-st.caption(f"✅ Last updated: {now.strftime('%d-%b-%Y %I:%M:%S %p IST')}")
+st.caption(f"Last updated: {today.strftime('%d-%b-%Y %I:%M:%S %p IST')}")
 st.subheader("Sentiment Summary")
-st.table(summary_df.style.format({c: '{:.2f}' for c in ['VEGA','THETA','DELTA'] if c in summary_df.columns}))
-
-# ----------------- RAW DATA DOWNLOAD -----------------
-st.subheader("Raw Log Data")
+st.table(
+    summary_df.style.format({
+        'DELTA': '{:.4f}',
+        'VEGA': '{:.2f}',
+        'THETA': '{:.2f}',
+        **({'OI': '{:.0f}'} if 'OI' in summary_df.columns else {})
+    })
+)
+st.subheader("Raw Data Log")
 st.download_button(
-    label="Download Full Greeks Log CSV",
-    data=pd.DataFrame._df_log.to_csv(index=False),
-    file_name=f"greeks_log_{now.strftime('%Y%m%d_%H%M%S')}.csv",
-    mime='text/csv'
+    label="Download CSV", data=df.to_csv(index=False),
+    file_name="greeks_log.csv", mime="text/csv"
 )
-
-# ----------------- FOOTER & REFRESH -----------------
-st.markdown("---")
-st.caption("🔄 Auto-refresh every 1 minute (set to 5 minutes if instability arises)")
-st_autorefresh = st_autorefresh(interval=60000)
-st.markdown(
-    "<div style='text-align:center;color:grey;'>"
-    "Made with ❤️ by Prakash Rai | Powered by Zerodha APIs"
-    "</div>", unsafe_allow_html=True
-)
+st.caption("🔄 Auto-refresh every minute.")
+st_autorefresh(interval=60 * 1000)
