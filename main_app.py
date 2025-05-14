@@ -11,17 +11,18 @@ import fetch_option_data  # ensure this module is importable
 # ---------- PAGE CONFIGURATION ----------
 st.set_page_config(page_title="📈 Greeks Sentiment Tracker", layout="wide")
 
-# ---------- ENVIRONMENT & CONSTANTS ----------
-# Read service account JSON from environment variable
-creds_json = os.getenv("GCREDS_JSON") or os.getenv("GCREDS")
-if not creds_json:
-    st.error("Service account credentials not found. Please set GCREDS_JSON or GCREDS as an environment variable.")
+# ---------- STREAMLIT SECRETS & CONSTANTS ----------
+# Load credentials and IDs from Streamlit secrets
+try:
+    creds_dict = st.secrets["gcreds"]
+except KeyError:
+    st.error("Service account credentials not found. Please define [gcreds] in Streamlit secrets.")
     st.stop()
-# Read sheet IDs from environment
-greeks_sheet_id = os.getenv("GREEKS_SHEET_ID")
-token_sheet_id  = os.getenv("TOKEN_SHEET_ID")
-if not greeks_sheet_id or not token_sheet_id:
-    st.error("GREEKS_SHEET_ID and TOKEN_SHEET_ID must be set as environment variables.")
+try:
+    greeks_sheet_id = st.secrets["GREEKS_SHEET_ID"]
+    token_sheet_id  = st.secrets["TOKEN_SHEET_ID"]
+except KeyError as e:
+    st.error(f"Missing secret: {e}. Please add GREEKS_SHEET_ID and TOKEN_SHEET_ID to Streamlit secrets.")
     st.stop()
 
 LOG_WS  = "GreeksLog"
