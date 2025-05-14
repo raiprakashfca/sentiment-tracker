@@ -45,51 +45,16 @@ wb = client.open_by_key(greeks_sheet_id)
 # ---------- ENSURE HEADER & INITIAL DATA ----------
 log_sheet = wb.worksheet(LOG_WS)
 vals = log_sheet.get_all_values()
-# Verify header, recreate if needed
+# Create header if missing
 if not vals or vals[0] != HEADER:
     log_sheet.clear()
     log_sheet.append_row(HEADER)
-    try:
-        # populate first data row
-        import os, json
-        # set environment for fetch_option_data
-        os.environ['GCREDS_JSON'] = json.dumps(dict(creds_dict))
-        os.environ['GREEKS_SHEET_ID'] = greeks_sheet_id
-        os.environ['TOKEN_SHEET_ID'] = token_sheet_id
-        fetch_option_data.main()
-    except Exception as e:
-        st.error(f"Initial data fetch failed: {e}")
-        st.stop()
-    vals = log_sheet.get_all_values()
-# Verify at least one data row exists
+    st.info("Initialized 'GreeksLog' with headers. Please run your fetch script to populate data.")
+    st.stop()
+# If header exists but no data rows
 if len(vals) < 2:
-    try:
-        # attempt one more fetch
-        import os, json
-        os.environ['GCREDS_JSON'] = json.dumps(creds_dict)
-        os.environ['GREEKS_SHEET_ID'] = greeks_sheet_id
-        os.environ['TOKEN_SHEET_ID'] = token_sheet_id
-        fetch_option_data.main()
-    except Exception as e:
-        st.error(f"Data fetch retry failed: {e}")
-        st.stop()
-    vals = log_sheet.get_all_values()
-    if len(vals) < 2:
-        st.error("❌ 'GreeksLog' requires at least one data row after header. Data fetch did not write to the sheet.")
-        st.stop()
-if len(vals) < 2:
-    try:
-        # attempt one more fetch
-        fetch_option_data.main()
-    except Exception as e:
-        st.error(f"Data fetch retry failed: {e}")
-        st.stop()
-    vals = log_sheet.get_all_values()
-    if len(vals) < 2:
-        st.error("❌ 'GreeksLog' requires at least one data row after header. Data fetch did not write to the sheet.")
-        st.stop()
-headers = vals[0]
-rows    = vals[1:]
+    st.info("No data rows found in 'GreeksLog'. Please run `fetch_option_data.py` to log the first data point.")
+    st.stop()
 headers = vals[0]
 rows    = vals[1:]
 
