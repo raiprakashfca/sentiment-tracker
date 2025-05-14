@@ -49,7 +49,7 @@ if not vals or vals[0] != HEADER:
     log_sheet.clear()
     log_sheet.append_row(HEADER)
     try:
-        fetch_option_data.log_greeks()
+        fetch_option_data.main()
     except Exception as e:
         st.error(f"Initial fetch failed: {e}")
         st.stop()
