@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-
-import json
 import datetime
 import pytz
 import numpy as np
@@ -11,11 +8,11 @@ from kiteconnect import KiteConnect
 
 # ---------- CONFIGURATION ----------
 GSHEET_CREDENTIALS_FILE = "credentials.json"
-SHEET_ID = "1RMI8YsExk0pQ-Q1PQ9YYYqRwZ52RKvJcbu-x9yu309k"
+LOG_SHEET_ID = "1RMI8YsExk0pQ-Q1PQ9YYYqRwZ52RKvJcbu-x9yu309k"
+TOKEN_SHEET_ID = "1mANuCob4dz3jvjigeO1km96vBzZHr-4ZflZEXxR8-qU"
 LOG_SHEET_NAME = "GreeksLog"
 OPEN_SHEET_NAME = "GreeksOpen"
 ARCHIVE_SHEET_NAME = "GreeksArchive"
-KITE_CREDENTIALS_FILE = "kite_credentials.json"
 RISK_FREE_RATE = 0.07
 DELTA_MIN = 0.05
 DELTA_MAX = 0.60
@@ -40,17 +37,24 @@ def bs_greeks(flag, S, K, T, r, sigma):
 
 # ---------- MAIN SCRIPT ----------
 def main():
-    # Load Kite credentials
-    with open(KITE_CREDENTIALS_FILE) as f:
-        kc = json.load(f)
-    kite = KiteConnect(api_key=kc['api_key'])
-    kite.set_access_token(kc['access_token'])
-
-    # Google Sheets setup
+    # Google Sheets setup for credentials and logging
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name(GSHEET_CREDENTIALS_FILE, scope)
     client = gspread.authorize(creds)
-    book = client.open_by_key(SHEET_ID)
+
+    # Fetch Kite credentials from Google Sheet
+    token_book = client.open_by_key(TOKEN_SHEET_ID)
+    token_ws = token_book.worksheet("ZerodhaTokenStore")
+    api_key = token_ws.acell('A1').value
+    access_token = token_ws.acell('C1').value
+    if not api_key or not access_token:
+        raise ValueError("Missing Kite credentials in 'ZerodhaTokenStore' sheet (A1=API Key, C1=Access Token).")
+
+    kite = KiteConnect(api_key=api_key)
+    kite.set_access_token(access_token)
+
+    # Open log workbook
+    book = client.open_by_key(LOG_SHEET_ID)
     log_ws = book.worksheet(LOG_SHEET_NAME)
     open_ws = book.worksheet(OPEN_SHEET_NAME)
 
@@ -84,7 +88,7 @@ def main():
         S = ltp_data[f"NSE:{sym}"]["last_price"]
         opts = [i for i in instruments if i['name']==sym and i['segment']=='NFO-OPT']
         for inst in opts:
-            flag = inst['instrument_type']  # 'CE' or 'PE'
+            flag = inst['instrument_type']
             K = inst['strike']
             exp_date = inst['expiry']
             expiry_dt = datetime.datetime.combine(exp_date, datetime.time(15,30), tzinfo=ist)
@@ -98,20 +102,20 @@ def main():
                 results[f"{key}_{flag.lower()}_vega"]  += vega
                 results[f"{key}_{flag.lower()}_theta"] += theta
 
-    # Build row for logging
+    # Build and append row
     row = [now.strftime('%Y-%m-%d %H:%M:%S')]
     for k in ['nifty','bn']:
         for o in ['ce','pe']:
-            row += [round(results[f"{k}_{o}_delta"], 4), round(results[f"{k}_{o}_vega"], 2), round(results[f"{k}_{o}_theta"], 2)]
-
-    # Append to log sheet
+            row += [round(results[f"{k}_{o}_delta"], 4),
+                    round(results[f"{k}_{o}_vega"], 2),
+                    round(results[f"{k}_{o}_theta"], 2)]
     log_ws.append_row(row)
 
     # Archive old rows based on date
     cutoff = (now - datetime.timedelta(days=RETENTION_DAYS)).date()
     all_vals = log_ws.get_all_values()
     to_archive = []
-    for idx, r in enumerate(all_vals[1:], start=2):  # skip header
+    for idx, r in enumerate(all_vals[1:], start=2):
         try:
             d = datetime.datetime.strptime(r[0], '%Y-%m-%d %H:%M:%S').date()
         except Exception:
@@ -125,10 +129,8 @@ def main():
         except gspread.WorksheetNotFound:
             archive_ws = book.add_worksheet(ARCHIVE_SHEET_NAME, rows=1, cols=len(headers))
             archive_ws.append_row(headers)
-        # Move rows to archive
         for _, data_row in to_archive:
             archive_ws.append_row(data_row)
-        # Delete from log in reverse order
         for idx, _ in sorted(to_archive, reverse=True):
             log_ws.delete_row(idx)
 
