@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import json
 import datetime
@@ -122,13 +123,13 @@ def main():
             K    = inst['strike']
             exp_dt = datetime.datetime.combine(inst['expiry'], datetime.time(15,30), tzinfo=ist)
             T = (exp_dt.astimezone(pytz.UTC) - now.astimezone(pytz.UTC)).total_seconds()/(365*24*3600)
-            # fetch option quote robustly
-qdict = kite.quote(f"NFO:{inst['instrument_token']}")
-if not qdict:
-    continue
-# extract the first key/value pair
-qkey, quote = next(iter(qdict.items()))
-            iv    = quote.get('implied_volatility',0.0)/100.0
+                        # fetch option quote robustly
+            qdict = kite.quote(f"NFO:{inst['instrument_token']}")
+            if not qdict:
+                continue
+            # extract the first key/value pair
+            qkey, quote = next(iter(qdict.items()))
+            iv = quote.get('implied_volatility', 0.0) / 100.0
             if T<=0 or iv<=0:
                 continue
             d1 = (np.log(S/K)+(RISK_FREE_RATE+0.5*iv*iv)*T)/(iv*np.sqrt(T))
