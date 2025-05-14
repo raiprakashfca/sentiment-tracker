@@ -53,7 +53,7 @@ if not vals or vals[0] != HEADER:
         # populate first data row
         import os, json
         # set environment for fetch_option_data
-        os.environ['GCREDS_JSON'] = json.dumps(creds_dict)
+        os.environ['GCREDS_JSON'] = json.dumps(dict(creds_dict))
         os.environ['GREEKS_SHEET_ID'] = greeks_sheet_id
         os.environ['TOKEN_SHEET_ID'] = token_sheet_id
         fetch_option_data.main()
