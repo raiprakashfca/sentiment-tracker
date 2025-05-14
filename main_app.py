@@ -10,11 +10,13 @@ import fetch_option_data  # ensure this module is importable
 # ---------- PAGE CONFIGURATION ----------
 st.set_page_config(page_title="📈 Greeks Sentiment Tracker", layout="wide")
 
-# ---------- CONSTANTS ----------
-SHEET_ID = "1RMI8YsExk0pQ-Q1PQ9YYYqRwZ52RKvJcbu-x9yu309k"
+# ---------- SECRETS & CONSTANTS ----------
+gcreds = st.secrets["GCREDS"]
+greeks_sheet_id = st.secrets["GREEKS_SHEET_ID"]
+token_sheet_id = st.secrets["TOKEN_SHEET_ID"]
 LOG_WS = "GreeksLog"
 OPEN_WS = "GreeksOpen"
-# Define expected header row
+# expected header
 HEADER = [
     "timestamp",
     "nifty_ce_delta", "nifty_ce_vega", "nifty_ce_theta",
@@ -23,36 +25,24 @@ HEADER = [
     "bn_pe_delta",    "bn_pe_vega",    "bn_pe_theta"
 ]
 
-# ---------- AUTHENTICATION ----------
-# Google Sheets auth using service account JSON from GCREDS or file
+# ---------- AUTHENTICATE GOOGLE SHEETS ----------
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_json = st.secrets.get("GCREDS")
-if creds_json:
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
-elif st.secrets.get("GSHEET_CREDENTIALS_FILE"):
-    creds = ServiceAccountCredentials.from_json_keyfile_name(
-        st.secrets["GSHEET_CREDENTIALS_FILE"], scope)
-else:
-    st.error("Service account credentials not found. Please set GCREDS secret.")
-    st.stop()
+creds = ServiceAccountCredentials.from_json_keyfile_dict(gcreds, scope)
 client = gspread.authorize(creds)
-wb = client.open_by_key(SHEET_ID)
+wb = client.open_by_key(greeks_sheet_id)
 
 # ---------- ENSURE HEADER & INITIAL DATA ----------
 log_sheet = wb.worksheet(LOG_WS)
 vals = log_sheet.get_all_values()
-# If header missing or incorrect
 if not vals or vals[0] != HEADER:
     log_sheet.clear()
     log_sheet.append_row(HEADER)
-    # Trigger initial logging
     try:
         fetch_option_data.log_greeks()
     except Exception as e:
         st.error(f"Failed to log initial data: {e}")
         st.stop()
     vals = log_sheet.get_all_values()
-# Now ensure at least one data row exists
 if len(vals) < 2:
     st.error("❌ 'GreeksLog' must have a header row and at least one data row.")
     st.stop()
@@ -61,10 +51,8 @@ rows = vals[1:]
 
 # ---------- LOAD DATAFRAME ----------
 df = pd.DataFrame(rows, columns=headers)
-# parse timestamps
 df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S')
 df['timestamp'] = df['timestamp'].dt.tz_localize('UTC').dt.tz_convert('Asia/Kolkata')
-# convert numeric cols
 for col in headers[1:]:
     df[col] = pd.to_numeric(df[col], errors='coerce')
 
@@ -74,14 +62,13 @@ open_vals = open_sheet.get_all_values()
 if len(open_vals) >= 2 and open_vals[0] == HEADER:
     open_series = pd.Series(open_vals[1], index=open_vals[0]).drop('timestamp').astype(float)
 else:
-    first = df.iloc[0]
-    open_series = first.drop('timestamp').astype(float)
+    open_series = df.iloc[0].drop('timestamp').astype(float)
 
 # ---------- CALCULATE CHANGES ----------
 latest = df.iloc[-1]
 changes = {col: latest[col] - open_series[col] for col in open_series.index}
 
-# ---------- SENTIMENT CLASSIFICATION ----------
+# ---------- SENTIMENT LOGIC ----------
 def classify_sentiment(ce_v, pe_v, ce_t, pe_t):
     if pe_v > 0 and ce_v < 0:
         s = 'BEARISH'
@@ -99,21 +86,12 @@ def classify_sentiment(ce_v, pe_v, ce_t, pe_t):
 rows_out = []
 today = datetime.datetime.now(pytz.timezone('Asia/Kolkata'))
 for key, label in [('nifty', 'NIFTY'), ('bn', 'BANKNIFTY')]:
-    ce_d = changes[f"{key}_ce_delta"]
-    ce_v = changes[f"{key}_ce_vega"]
-    ce_t = changes[f"{key}_ce_theta"]
-    pe_d = changes[f"{key}_pe_delta"]
-    pe_v = changes[f"{key}_pe_vega"]
-    pe_t = changes[f"{key}_pe_theta"]
+    ce_d, ce_v, ce_t = (changes[f"{key}_ce_delta"], changes[f"{key}_ce_vega"], changes[f"{key}_ce_theta"])
+    pe_d, pe_v, pe_t = (changes[f"{key}_pe_delta"], changes[f"{key}_pe_vega"], changes[f"{key}_pe_theta"])
     sentiment = classify_sentiment(ce_v, pe_v, ce_t, pe_t)
     for opt, d, v, t in [('CE', ce_d, ce_v, ce_t), ('PE', pe_d, pe_v, pe_t)]:
-        rows_out.append({
-            'Instrument': f"{label} {opt}",
-            'SENTIMENT': sentiment,
-            'DELTA': d,
-            'VEGA': v,
-            'THETA': t
-        })
+        rows_out.append({'Instrument': f"{label} {opt}", 'SENTIMENT': sentiment,
+                         'DELTA': d, 'VEGA': v, 'THETA': t})
 oi_cols = [c for c in headers if c.endswith('_oi')]
 if oi_cols:
     for entry in rows_out:
@@ -126,18 +104,12 @@ summary_df = pd.DataFrame(rows_out)
 st.title("📈 Greeks Sentiment Tracker")
 st.caption(f"Last updated: {today.strftime('%d-%b-%Y %I:%M:%S %p IST')}")
 st.subheader("Sentiment Summary")
-st.table(
-    summary_df.style.format({
-        'DELTA': '{:.4f}',
-        'VEGA': '{:.2f}',
-        'THETA': '{:.2f}',
-        **({'OI': '{:.0f}'} if 'OI' in summary_df.columns else {})
-    })
-)
+st.table(summary_df.style.format({
+    'DELTA': '{:.4f}', 'VEGA': '{:.2f}', 'THETA': '{:.2f}',
+    **({'OI': '{:.0f}'} if 'OI' in summary_df.columns else {})
+}))
 st.subheader("Raw Data Log")
-st.download_button(
-    label="Download CSV", data=df.to_csv(index=False),
-    file_name="greeks_log.csv", mime="text/csv"
-)
+st.download_button(label="Download CSV", data=df.to_csv(index=False),
+                   file_name="greeks_log.csv", mime="text/csv")
 st.caption("🔄 Auto-refresh every minute.")
 st_autorefresh(interval=60 * 1000)
