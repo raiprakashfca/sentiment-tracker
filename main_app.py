@@ -45,18 +45,31 @@ wb = client.open_by_key(greeks_sheet_id)
 # ---------- ENSURE HEADER & INITIAL DATA ----------
 log_sheet = wb.worksheet(LOG_WS)
 vals = log_sheet.get_all_values()
+# Verify header, recreate if needed
 if not vals or vals[0] != HEADER:
     log_sheet.clear()
     log_sheet.append_row(HEADER)
     try:
+        # populate first data row
         fetch_option_data.main()
     except Exception as e:
-        st.error(f"Initial fetch failed: {e}")
+        st.error(f"Initial data fetch failed: {e}")
         st.stop()
     vals = log_sheet.get_all_values()
+# Verify at least one data row exists
 if len(vals) < 2:
-    st.error("❌ 'GreeksLog' requires at least one data row after header.")
-    st.stop()
+    try:
+        # attempt one more fetch
+        fetch_option_data.main()
+    except Exception as e:
+        st.error(f"Data fetch retry failed: {e}")
+        st.stop()
+    vals = log_sheet.get_all_values()
+    if len(vals) < 2:
+        st.error("❌ 'GreeksLog' requires at least one data row after header. Data fetch did not write to the sheet.")
+        st.stop()
+headers = vals[0]
+rows    = vals[1:]
 headers = vals[0]
 rows    = vals[1:]
 
