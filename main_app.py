@@ -11,17 +11,12 @@ import fetch_option_data  # ensure this module is importable
 st.set_page_config(page_title="📈 Greeks Sentiment Tracker", layout="wide")
 
 # ---------- SECRETS & CONSTANTS ----------
-creds_json = st.secrets.get("GCREDS") or st.secrets.get("gcreds")
-if not creds_json:
-    st.error("Service account credentials (GCREDS) not found. Please configure your secret.")
-    st.stop()
-greeks_sheet_id = st.secrets.get("GREEKS_SHEET_ID") or st.secrets.get("greeks_sheet_id")
-if not greeks_sheet_id:
-    st.error("GREEKS_SHEET_ID secret not found.")
-    st.stop()
-token_sheet_id = st.secrets.get("TOKEN_SHEET_ID") or st.secrets.get("token_sheet_id")
-if not token_sheet_id:
-    st.error("TOKEN_SHEET_ID secret not found.")
+try:
+    creds_json = st.secrets["GCREDS"]
+    greeks_sheet_id = st.secrets["GREEKS_SHEET_ID"]
+    token_sheet_id = st.secrets["TOKEN_SHEET_ID"]
+except KeyError as e:
+    st.error(f"Missing secret: {e}. Please configure your Streamlit secrets accordingly.")
     st.stop()
 
 # ---------- AUTHENTICATE GOOGLE SHEETS ----------
