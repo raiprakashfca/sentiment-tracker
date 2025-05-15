@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import json
 import datetime
@@ -47,6 +48,8 @@ def load_service_account():
 
 # ---------- MAIN SCRIPT ----------
 def main():
+    # --- Debug: start of main ---
+    print("[Fetch] Starting fetch_option_data.py at", datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
     # Authenticate Google Sheets
     creds = load_service_account()
     client = gspread.authorize(creds)
@@ -89,7 +92,7 @@ def main():
 
     # Underlying mappings
     instrument_names = {'nifty': 'NIFTY', 'bn': 'BANKNIFTY'}
-    ltp_symbol_map   = {'nifty': ['NIFTY 50', 'NIFTY'], 'bn': ['BANKNIFTY']}
+    ltp_symbol_map   = {'nifty': ['NIFTY 50', 'NIFTY'], 'bn': ['NIFTY BANK', 'BANKNIFTY'] }
 
     # Prepare aggregation
     results = {f"{k}_{o}_{m}": 0.0
