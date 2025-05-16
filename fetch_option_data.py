@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import os
 import json
 import datetime
@@ -124,14 +123,38 @@ def main():
             exp_dt = datetime.datetime.combine(inst['expiry'], datetime.time(15,30), tzinfo=ist)
             T = (exp_dt.astimezone(pytz.UTC) - now.astimezone(pytz.UTC)).total_seconds()/(365*24*3600)
 
-            # Robust quote fetch
+                        # Robust quote fetch
             qdict = kite.quote(f"NFO:{inst['instrument_token']}")
             if not qdict:
                 continue
             _, quote = next(iter(qdict.items()))
+            # Try API IV first
             iv = quote.get('implied_volatility', 0.0) / 100.0
-
+            # Fallback: invert BS using last_price if IV missing or zero
+            price = quote.get('last_price')
+            if (not iv or iv <= 0) and price is not None:
+                # Bisection method to find implied volatility
+                def bs_price(vol):
+                    # Black-Scholes price
+                    d1 = (np.log(S/K) + (RISK_FREE_RATE + 0.5 * vol**2) * T) / (vol * np.sqrt(T))
+                    d2 = d1 - vol * np.sqrt(T)
+                    if flag == 'CE':
+                        return S * norm.cdf(d1) - K * np.exp(-RISK_FREE_RATE * T) * norm.cdf(d2)
+                    else:
+                        return K * np.exp(-RISK_FREE_RATE * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+                # bisection bounds
+                low, high = 1e-6, 5.0
+                for _ in range(50):
+                    mid = 0.5 * (low + high)
+                    p_mid = bs_price(mid)
+                    if p_mid > price:
+                        high = mid
+                    else:
+                        low = mid
+                iv = 0.5 * (low + high)
             # Skip invalid
+            if T <= 0 or iv <= 0:
+                continue
             if T <= 0 or iv <= 0:
                 continue
 
