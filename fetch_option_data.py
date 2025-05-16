@@ -18,14 +18,15 @@ GCREDS_ENV_VAR       = "GCREDS"
 GREEKS_SHEET_ENV_VAR = "GREEKS_SHEET_ID"
 TOKEN_SHEET_ENV_VAR  = "TOKEN_SHEET_ID"
 
-LOG_SHEET_NAME    = os.getenv("LOG_SHEET_NAME", "GreeksLog")
-OPEN_SHEET_NAME   = os.getenv("OPEN_SHEET_NAME", "GreeksOpen")
-ARCHIVE_SHEET_NAME= os.getenv("ARCHIVE_SHEET_NAME", "GreeksArchive")
+LOG_SHEET_NAME       = os.getenv("LOG_SHEET_NAME", "GreeksLog")
+OPEN_SHEET_NAME      = os.getenv("OPEN_SHEET_NAME", "GreeksOpen")
+ARCHIVE_SHEET_NAME   = os.getenv("ARCHIVE_SHEET_NAME", "GreeksArchive")
 
 RISK_FREE_RATE = float(os.getenv("RISK_FREE_RATE", "0.07"))
 DELTA_MIN      = float(os.getenv("DELTA_MIN", "0.0"))
 DELTA_MAX      = float(os.getenv("DELTA_MAX", "1.0"))
 RETENTION_DAYS = int(os.getenv("RETENTION_DAYS", "7"))
+QUOTE_BATCH_SIZE = int(os.getenv("QUOTE_BATCH_SIZE", "50"))
 
 CACHE_FILE = os.getenv("INSTRUMENT_CACHE_FILE", "instrument_cache.pkl")
 CACHE_TTL   = int(os.getenv("INSTRUMENT_CACHE_TTL_HOURS", "24")) * 3600  # seconds
@@ -97,7 +98,6 @@ def reload_kite_token(kite, ws):
 
 # ----------------- Instrument Cache ----------------
 def get_all_instruments(kite):
-    # Try load cache
     if os.path.exists(CACHE_FILE) and (time.time() - os.path.getmtime(CACHE_FILE)) < CACHE_TTL:
         try:
             with open(CACHE_FILE, "rb") as f:
@@ -106,7 +106,6 @@ def get_all_instruments(kite):
             return instruments
         except Exception as e:
             logging.warning("Failed to load cache: %s", e)
-    # Fetch fresh
     instruments = kite.instruments("NFO")
     try:
         with open(CACHE_FILE, "wb") as f:
@@ -126,12 +125,17 @@ def safe_ltp(kite, ws, symbols):
         return kite.ltp(*symbols)
 
 def safe_quote(kite, ws, tokens):
-    try:
-        return kite.quote(tokens)
-    except Exception as e:
-        logging.warning("Quote fetch error: %s – retrying", e)
-        reload_kite_token(kite, ws)
-        return kite.quote(tokens)
+    all_quotes = {}
+    for i in range(0, len(tokens), QUOTE_BATCH_SIZE):
+        batch = tokens[i:i+QUOTE_BATCH_SIZE]
+        try:
+            quotes = kite.quote(batch)
+        except Exception as e:
+            logging.warning("Quote fetch error for batch %d-%d: %s – retrying", i, i+len(batch), e)
+            reload_kite_token(kite, ws)
+            quotes = kite.quote(batch)
+        all_quotes.update(quotes)
+    return all_quotes
 
 # ----------------- Greeks Calculations ------------
 def fallback_iv(S, K, T, r, price, flag):
@@ -144,15 +148,15 @@ def fallback_iv(S, K, T, r, price, flag):
             return K*np.exp(-r*T)*norm.cdf(-d2) - S*norm.cdf(-d1)
     low, high = 1e-6, 5.0
     for _ in range(50):
-        mid = (low + high)/2
+        mid = (low + high) / 2
         if bs_price(mid) > price:
             high = mid
         else:
             low = mid
-    return (low + high)/2
+    return (low + high) / 2
 
 def calculate_greeks(S, K, T, r, vol, flag):
-    d1 = (np.log(S/K) + (r + 0.5*vol*vol)*T) / (vol * np.sqrt(T))
+    d1 = (np.log(S/K) + (r + 0.5*vol*vol)*T) / (vol*np.sqrt(T))
     d2 = d1 - vol*np.sqrt(T)
     delta = norm.cdf(d1) if flag == "CE" else -norm.cdf(-d1)
     vega  = S * norm.pdf(d1) * np.sqrt(T)
@@ -164,11 +168,10 @@ def calculate_greeks(S, K, T, r, vol, flag):
 
 # ----------------- Sheet Writes --------------------
 def write_sheets(client, greeks_key, log_row):
-    book   = client.open_by_key(greeks_key)
-    log_ws = book.worksheet(LOG_SHEET_NAME)
-    open_ws= book.worksheet(OPEN_SHEET_NAME)
+    book    = client.open_by_key(greeks_key)
+    log_ws  = book.worksheet(LOG_SHEET_NAME)
+    open_ws = book.worksheet(OPEN_SHEET_NAME)
 
-    # Prepare append for log
     vals = log_ws.get_all_values()
     to_append = []
     if not vals or vals[0] != HEADER:
@@ -177,7 +180,6 @@ def write_sheets(client, greeks_key, log_row):
     to_append.append(log_row)
     log_ws.append_rows(to_append, value_input_option='USER_ENTERED')
 
-    # Archive old
     cutoff = (datetime.datetime.now(IST) - datetime.timedelta(days=RETENTION_DAYS)).date()
     all_vals = log_ws.get_all_values()
     archive_rows = [r for r in all_vals[1:]
@@ -189,13 +191,11 @@ def write_sheets(client, greeks_key, log_row):
             arc_ws = book.add_worksheet(ARCHIVE_SHEET_NAME, rows="100", cols=str(len(HEADER)))
             arc_ws.append_row(HEADER)
         arc_ws.append_rows(archive_rows, value_input_option='USER_ENTERED')
-        # Delete old rows bottom-up
         for idx in range(len(all_vals), 1, -1):
             row_date = datetime.datetime.strptime(all_vals[idx-1][0], '%Y-%m-%d %H:%M:%S').date()
             if row_date < cutoff:
                 log_ws.delete_rows(idx)
 
-    # Open sheet snapshot
     open_vals = open_ws.get_all_values()
     today_str = datetime.datetime.now(IST).strftime('%Y-%m-%d')
     if len(open_vals) < 2 or not open_vals[1][0].startswith(today_str):
@@ -208,38 +208,30 @@ def main():
     logging.info("===== Starting fetch_option_data.py =====")
 
     greeks_key, token_key = load_config()
-    client = authorize_sheets()
-    kite, token_ws       = get_kite_client(client, token_key)
+    client, token_key  = authorize_sheets(), token_key
+    kite, token_ws      = get_kite_client(client, token_key)
+    instruments         = get_all_instruments(kite)
 
-    instruments = get_all_instruments(kite)
-
-    # Mappings
     instrument_names = {'nifty': 'NIFTY', 'bn': 'BANKNIFTY'}
     ltp_map = {'nifty': ['NIFTY 50','NIFTY'], 'bn': ['NIFTY BANK','BANKNIFTY']}
 
-    # Fetch all spot LTPs
     ltp_keys = [f"NSE:{sym}" for syms in ltp_map.values() for sym in syms]
     ltp_data = safe_ltp(kite, token_ws, ltp_keys)
     now = datetime.datetime.now(IST)
 
-    # Initialize accumulators
-    results = {f"{k}_{o}_{m}": 0.0
-               for k in instrument_names
-               for o in ['ce','pe']
-               for m in ['delta','vega','theta']}
+    results = {f"{k}_{o}_{m}": 0.0 for k in instrument_names for o in ['ce','pe'] for m in ['delta','vega','theta']}
 
     for key, name in instrument_names.items():
         sym = next((s for s in ltp_map[key] if f"NSE:{s}" in ltp_data), None)
         if not sym:
             logging.warning("Spot LTP missing for %s", key)
             continue
-        S = ltp_data[f"NSE:{sym}"]['last_price']
+        S = ltp_data[f"NSE:{sym}"+]['last_price']
         opts = [i for i in instruments if i['name']==name and i['segment']=='NFO-OPT']
         tokens = [f"NFO:{i['instrument_token']}" for i in opts]
         quotes = safe_quote(kite, token_ws, tokens)
         for inst in opts:
-            token_str = f"NFO:{inst['instrument_token']}"
-            quote     = quotes.get(token_str)
+            quote     = quotes.get(f"NFO:{inst['instrument_token']}")
             if not quote:
                 continue
             iv    = quote.get('implied_volatility',0)/100.0
@@ -257,15 +249,10 @@ def main():
                 results[f"{key}_{inst['instrument_type'].lower()}_vega"]  += vega
                 results[f"{key}_{inst['instrument_type'].lower()}_theta"] += theta
 
-    # Build row
     log_row = [now.strftime('%Y-%m-%d %H:%M:%S')]
     for k in instrument_names:
         for o in ['ce','pe']:
-            log_row += [
-                round(results[f"{k}_{o}_delta"],4),
-                round(results[f"{k}_{o}_vega"],2),
-                round(results[f"{k}_{o}_theta"],2)
-            ]
+            log_row += [round(results[f"{k}_{o}_delta"],4), round(results[f"{k}_{o}_vega"],2), round(results[f"{k}_{o}_theta"],2)]
 
     write_sheets(client, greeks_key, log_row)
     logging.info("===== Completed fetch_option_data.py =====")
