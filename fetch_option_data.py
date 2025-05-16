@@ -47,7 +47,6 @@ def load_service_account():
 
 # ---------- MAIN SCRIPT ----------
 def main():
-    # --- Debug: start of main ---
     print("[Fetch] Starting fetch_option_data.py at", datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
     # Authenticate Google Sheets
     creds = load_service_account()
@@ -86,12 +85,12 @@ def main():
         log_ws.append_row(HEADER)
         vals = log_ws.get_all_values()
 
-    # Fetch all instruments
+    # Fetch instrument metadata
     instruments = kite.instruments("NFO")
 
     # Underlying mappings
     instrument_names = {'nifty': 'NIFTY', 'bn': 'BANKNIFTY'}
-    ltp_symbol_map   = {'nifty': ['NIFTY 50', 'NIFTY'], 'bn': ['NIFTY BANK', 'BANKNIFTY'] }
+    ltp_symbol_map   = {'nifty': ['NIFTY 50', 'NIFTY'], 'bn': ['NIFTY BANK', 'BANKNIFTY']}
 
     # Prepare aggregation
     results = {f"{k}_{o}_{m}": 0.0
@@ -113,7 +112,7 @@ def main():
         print(f"{key.upper()} resolved to spot symbol: {sym}")
         if not sym:
             continue
-        S = ltp_data[f"NSE:{sym}"]['last_price']
+        S = ltp_data[f"NSE:{sym}"]["last_price"]
         # Filter option instruments
         opts = [i for i in instruments if i['name']==name and i['segment']=='NFO-OPT']
         print(f"Found {len(opts)} option instruments for {name}")
@@ -123,38 +122,34 @@ def main():
             exp_dt = datetime.datetime.combine(inst['expiry'], datetime.time(15,30), tzinfo=ist)
             T = (exp_dt.astimezone(pytz.UTC) - now.astimezone(pytz.UTC)).total_seconds()/(365*24*3600)
 
-                        # Robust quote fetch
+            # Robust quote fetch
             qdict = kite.quote(f"NFO:{inst['instrument_token']}")
             if not qdict:
                 continue
             _, quote = next(iter(qdict.items()))
+
             # Try API IV first
             iv = quote.get('implied_volatility', 0.0) / 100.0
-            # Fallback: invert BS using last_price if IV missing or zero
             price = quote.get('last_price')
-            if (not iv or iv <= 0) and price is not None:
-                # Bisection method to find implied volatility
+            # Fallback: invert BS using last_price if IV missing or zero
+            if (iv is None or iv <= 0) and price is not None:
                 def bs_price(vol):
-                    # Black-Scholes price
                     d1 = (np.log(S/K) + (RISK_FREE_RATE + 0.5 * vol**2) * T) / (vol * np.sqrt(T))
                     d2 = d1 - vol * np.sqrt(T)
                     if flag == 'CE':
                         return S * norm.cdf(d1) - K * np.exp(-RISK_FREE_RATE * T) * norm.cdf(d2)
                     else:
                         return K * np.exp(-RISK_FREE_RATE * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
-                # bisection bounds
                 low, high = 1e-6, 5.0
                 for _ in range(50):
                     mid = 0.5 * (low + high)
-                    p_mid = bs_price(mid)
-                    if p_mid > price:
+                    if bs_price(mid) > price:
                         high = mid
                     else:
                         low = mid
                 iv = 0.5 * (low + high)
+
             # Skip invalid
-            if T <= 0 or iv <= 0:
-                continue
             if T <= 0 or iv <= 0:
                 continue
 
