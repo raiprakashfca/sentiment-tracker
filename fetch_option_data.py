@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import os
 import json
 import time
@@ -11,7 +10,7 @@ from scipy.stats import norm
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread.exceptions import WorksheetNotFound
 # nsepython import
-import nsepython
+from nsepython import option_chain
 
 # ----------------- Configuration -----------------
 GCREDS_ENV_VAR       = "GCREDS"
