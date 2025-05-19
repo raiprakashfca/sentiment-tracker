@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import json
 import time
@@ -10,7 +11,7 @@ from scipy.stats import norm
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread.exceptions import WorksheetNotFound
 # nsepython import
-from nsepython import get_optionchain
+import nsepython
 
 # ----------------- Configuration -----------------
 GCREDS_ENV_VAR       = "GCREDS"
@@ -86,7 +87,7 @@ def fetch_greeks_nse(index_symbol: str):
       results - dict accumulating delta/vega/theta sums
     """
     # get full chain
-    chain = get_optionchain(index_symbol)
+    chain = nsepython.get_optionchain(index_symbol)
     # extract underlying
     records = chain.get('records', {})
     S = records.get('underlyingValue')
