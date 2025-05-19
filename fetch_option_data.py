@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import os
 import json
 import time
@@ -84,43 +83,49 @@ def fetch_greeks_nse(index_symbol: str):
     Fetch CE/PE option chain via nsepython for given index (e.g. 'NIFTY', 'BANKNIFTY').
     Returns:
       S       - underlying level
-      results - dict accumulating delta/vega/theta sums
+      acc     - dict accumulating delta/vega/theta sums
     """
-    # Attempt primary fetch via nsepython
+    # Try fetching the chain
     try:
         chain = option_chain(index_symbol)
     except Exception as e:
         logging.error("nsepython.option_chain failed for %s: %s", index_symbol, e)
-        # return empty accumulator to avoid crash
-        empty_acc = {'ce_delta':0.0, 'ce_vega':0.0, 'ce_theta':0.0,
-                     'pe_delta':0.0, 'pe_vega':0.0, 'pe_theta':0.0}
+        empty_acc = {
+            'ce_delta':0.0, 'ce_vega':0.0, 'ce_theta':0.0,
+            'pe_delta':0.0, 'pe_vega':0.0, 'pe_theta':0.0
+        }
         return None, empty_acc
-    """
-    Fetch CE/PE option chain via nsepython for given index (e.g. 'NIFTY', 'BANKNIFTY').
-    Returns:
-      S       - underlying level
-      results - dict accumulating delta/vega/theta sums
-    """
-    # get full chain
-    chain = option_chain(index_symbol)
-    # extract underlying
+
+    # Parse records
     records = chain.get('records', {})
     S = records.get('underlyingValue')
-    # get expiry list
     expiries = records.get('expiryDates', [])
-    if not expiries or S is None:
-        logging.error('No underlying or expiry data for %s', index_symbol)
-        return S, {}
-    # choose nearest expiry
+    if S is None or not expiries:
+        logging.error("Missing underlying or expiry dates for %s", index_symbol)
+        empty_acc = {
+            'ce_delta':0.0, 'ce_vega':0.0, 'ce_theta':0.0,
+            'pe_delta':0.0, 'pe_vega':0.0, 'pe_theta':0.0
+        }
+        return S, empty_acc
+
+    # Use nearest expiry
     expiry = expiries[0]
-    # fetch for that expiry
     opt_data = records.get('data', [])
-    # accumulate
-    acc = {'ce_delta':0.0, 'ce_vega':0.0, 'ce_theta':0.0,
-           'pe_delta':0.0, 'pe_vega':0.0, 'pe_theta':0.0}
+
+    # Prepare accumulator
+    acc = {
+        'ce_delta':0.0, 'ce_vega':0.0, 'ce_theta':0.0,
+        'pe_delta':0.0, 'pe_vega':0.0, 'pe_theta':0.0
+    }
+
     now = datetime.datetime.now(IST)
     exp_dt = datetime.datetime.strptime(expiry, '%d-%b-%Y')
-    T = (exp_dt - now).total_seconds()/(365*24*3600)
+    T = (exp_dt - now).total_seconds() / (365*24*3600)
+    if T <= 0:
+        logging.warning("Expiry %s already passed for %s", expiry, index_symbol)
+        return S, acc
+
+    # Iterate through strikes
     for rec in opt_data:
         K = rec.get('strikePrice')
         for side in ('CE','PE'):
@@ -129,19 +134,19 @@ def fetch_greeks_nse(index_symbol: str):
                 continue
             price = opt.get('lastPrice')
             iv = opt.get('impliedVolatility')
-            # skip invalid
-            if not price or not iv or T<=0:
+            if not price or not iv:
                 continue
-            # Greeks
-            d,v,t = calculate_greeks(S, K, T, RISK_FREE_RATE, iv, side)
+            # Calculate Greeks
+            delta, vega, theta = calculate_greeks(S, K, T, RISK_FREE_RATE, iv, side)
             key_pref = side.lower()
-            if DELTA_MIN <= abs(d) <= DELTA_MAX:
-                acc[f'{key_pref}_delta'] += d
-                acc[f'{key_pref}_vega']  += v
-                acc[f'{key_pref}_theta'] += t
+            if DELTA_MIN <= abs(delta) <= DELTA_MAX:
+                acc[f'{key_pref}_delta'] += delta
+                acc[f'{key_pref}_vega']  += vega
+                acc[f'{key_pref}_theta'] += theta
+
     return S, acc
 
-# ----------------- Write to Sheets ------------------
+# ----------------- Write to Sheets ---------------- ------------------
 def write_sheets(client, greeks_key, row):
     book   = client.open_by_key(greeks_key)
     log_ws = book.worksheet(LOG_SHEET_NAME)
