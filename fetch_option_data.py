@@ -191,7 +191,9 @@ def main():
                 round(acc.get(f'{side}_vega',0),2),
                 round(acc.get(f'{side}_theta',0),2)
             ]
-    write_sheets(client, greeks_key, row)
+    # DEBUG: print the assembled row for verification
+    print("DEBUG OUTPUT ROW:", row)
+    write_sheets(client, greeks_key, row)(client, greeks_key, row)
     logging.info('Completed fetch via nsepython')
 
 if __name__=='__main__': main()
