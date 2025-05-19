@@ -86,6 +86,21 @@ def fetch_greeks_nse(index_symbol: str):
       S       - underlying level
       results - dict accumulating delta/vega/theta sums
     """
+    # Attempt primary fetch via nsepython
+    try:
+        chain = option_chain(index_symbol)
+    except Exception as e:
+        logging.error("nsepython.option_chain failed for %s: %s", index_symbol, e)
+        # return empty accumulator to avoid crash
+        empty_acc = {'ce_delta':0.0, 'ce_vega':0.0, 'ce_theta':0.0,
+                     'pe_delta':0.0, 'pe_vega':0.0, 'pe_theta':0.0}
+        return None, empty_acc
+    """
+    Fetch CE/PE option chain via nsepython for given index (e.g. 'NIFTY', 'BANKNIFTY').
+    Returns:
+      S       - underlying level
+      results - dict accumulating delta/vega/theta sums
+    """
     # get full chain
     chain = option_chain(index_symbol)
     # extract underlying
