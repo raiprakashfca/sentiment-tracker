@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import json
 import pickle
@@ -8,6 +9,7 @@ import pytz
 import numpy as np
 from scipy.stats import norm
 import gspread
+import pprint  # for inspecting quotes
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread.exceptions import WorksheetNotFound
 from kiteconnect import KiteConnect
