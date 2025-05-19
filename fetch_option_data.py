@@ -64,20 +64,31 @@ def authorize_sheets():
     credentials = ServiceAccountCredentials.from_json_keyfile_dict(creds, scope)
     return gspread.authorize(credentials)
 
-# ----------------- Fetch NSE Option Chain ------------
+# ----------------- Fetch NSE Option Chain  ------------
 def fetch_option_chain_nse(symbol: str) -> list:
+    base = "https://www.nseindia.com"
     session = requests.Session()
     headers = {
-        "User-Agent": "Mozilla/5.0",
+        "Host": "www.nseindia.com",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.nseindia.com/option-chain"
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": f"{base}/option-chain-indices?symbol={symbol}",
+        "Origin": base,
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
     }
-    # Prime cookies
-    session.get("https://www.nseindia.com", headers=headers, timeout=5)
-    url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
+    # Prime cookies by visiting the option-chain page
+    session.get(f"{base}/option-chain-indices?symbol={symbol}", headers=headers, timeout=5)
+    time.sleep(1)  # brief pause
+    # Now fetch JSON
+    url = f"{base}/api/option-chain-indices?symbol={symbol}"
     resp = session.get(url, headers=headers, timeout=5)
-    resp.raise_for_status()
-    return resp.json()["records"]["data"]
+    if resp.status_code != 200:
+        logging.error("NSE API %s returned status %d", url, resp.status_code)
+        return []
+    data = resp.json()
+    return data.get("records", {}).get("data", [])
 
 # ----------------- Greeks calculation --------------
 def calculate_greeks(S, K, T, r, vol, flag):
@@ -141,10 +152,10 @@ def main():
         if not data:
             logging.warning("No data from NSE for %s", symbol)
             continue
-        S = data[0]['underlyingValue']
+        S = data[0].get('underlyingValue', 0)
         for rec in data:
-            K = rec['strikePrice']
-            exp_dt = datetime.datetime.strptime(rec['expiryDate'], '%d-%b-%Y')
+            K = rec.get('strikePrice')
+            exp_dt = datetime.datetime.strptime(rec.get('expiryDate',''), '%d-%b-%Y')
             T = (exp_dt - now).total_seconds() / (365*24*3600)
             if T <= 0:
                 continue
@@ -158,9 +169,9 @@ def main():
                     continue
                 d, v, t = calculate_greeks(S, K, T, RISK_FREE_RATE, iv, side)
                 if DELTA_MIN <= abs(d) <= DELTA_MAX:
-                    results[f"{key}_{side}_{'delta'}"] += d
-                    results[f"{key}_{side}_{'vega'}"]  += v
-                    results[f"{key}_{side}_{'theta'}"] += t
+                    results[f"{key}_{side}_delta"] += d
+                    results[f"{key}_{side}_vega"]  += v
+                    results[f"{key}_{side}_theta"] += t
         # append sums for this symbol
         for side in ['CE','PE']:
             row += [
