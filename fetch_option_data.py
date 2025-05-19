@@ -88,50 +88,38 @@ def fetch_greeks_nse(index_symbol: str):
     try:
         chain = option_chain(index_symbol)
     except Exception as e:
-        logging.error("nsepython.option_chain failed for %s: %s", index_symbol, e)
+        # DEBUG: print exception from nsepython
+        print(f"DEBUG: option_chain raised exception for {index_symbol}: {e}")
         empty_acc = {k: 0.0 for k in ['ce_delta','ce_vega','ce_theta','pe_delta','pe_vega','pe_theta']}
         return None, empty_acc
-    # DEBUG: inspect chain structure
+
+    # DEBUG: inspect chain keys
     print(f"DEBUG: option_chain keys: {list(chain.keys())}")
     records = chain.get('records', {})
-    # DEBUG: inspect records keys
     print(f"DEBUG: records keys: {list(records.keys())}")
     S = records.get('underlyingValue')
     expiries = records.get('expiryDates', [])
     if S is None or not expiries:
-        logging.error("Missing underlying or expiry dates for %s", index_symbol)
+        print(f"DEBUG: Missing underlying ({S}) or expiries ({expiries}) for {index_symbol}")
         empty_acc = {k: 0.0 for k in ['ce_delta','ce_vega','ce_theta','pe_delta','pe_vega','pe_theta']}
         return S, empty_acc
+
     expiry = expiries[0]
     opt_data = records.get('data', [])
-    # DEBUG: inspect opt_data length and sample
     print(f"DEBUG: opt_data length for {index_symbol}: {len(opt_data)}")
     if opt_data:
         print(f"DEBUG: first opt_data entry keys: {list(opt_data[0].keys())}")
+
+    # Initialize accumulator
     acc = {k: 0.0 for k in ['ce_delta','ce_vega','ce_theta','pe_delta','pe_vega','pe_theta']}
     now = datetime.datetime.now(IST)
     exp_dt = datetime.datetime.strptime(expiry, '%d-%b-%Y')
     T = (exp_dt - now).total_seconds() / (365*24*3600)
     if T <= 0:
-        logging.warning("Expiry %s already passed for %s", expiry, index_symbol)
+        print(f"DEBUG: Expiry {expiry} already passed for {index_symbol}")
         return S, acc
-    for rec in opt_data:
-        K = rec.get('strikePrice')
-        for side in ('CE','PE'):
-            opt = rec.get(side)
-            if not opt:
-                continue
-            price = opt.get('lastPrice')
-            iv = opt.get('impliedVolatility')
-            if not price or not iv:
-                continue
-            delta, vega, theta = calculate_greeks(S, K, T, RISK_FREE_RATE, iv, side)
-            key_pref = side.lower()
-            if DELTA_MIN <= abs(delta) <= DELTA_MAX:
-                acc[f'{key_pref}_delta'] += delta
-                acc[f'{key_pref}_vega']  += vega
-                acc[f'{key_pref}_theta'] += theta
-    return S, acc
+
+    # Compute Greeks
     for rec in opt_data:
         K = rec.get('strikePrice')
         for side in ('CE','PE'):
