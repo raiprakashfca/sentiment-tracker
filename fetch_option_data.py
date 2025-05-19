@@ -6,6 +6,7 @@ import pytz
 import numpy as np
 import gspread
 import yfinance as yf
+import pandas as pd  # needed for DataFrame operations
 from scipy.stats import norm
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread.exceptions import WorksheetNotFound
@@ -77,6 +78,60 @@ def calculate_greeks(S, K, T, r, vol, flag):
 
 # ----------------- Fetch via yfinance ----------------
 def fetch_greeks_yf(ticker_symbol: str):
+    """
+    Fetch option chain using yfinance for given ticker.
+    Returns dict with ce_delta, ce_vega, ce_theta, pe_delta, pe_vega, pe_theta.
+    """
+    # Prepare zero accumulator for fallback
+    zero_acc = {'ce_delta':0.0,'ce_vega':0.0,'ce_theta':0.0,'pe_delta':0.0,'pe_vega':0.0,'pe_theta':0.0}
+    try:
+        tk = yf.Ticker(ticker_symbol)
+        info = tk.info
+        S = info.get('regularMarketPrice')
+        if S is None:
+            logging.warning("Cannot fetch underlying price for %s", ticker_symbol)
+            return zero_acc
+        # choose nearest expiry
+        expiries = tk.options
+        if not expiries:
+            logging.warning("No expiry dates for %s", ticker_symbol)
+            return zero_acc
+        exp = expiries[0]
+        chain = tk.option_chain(exp)
+        calls = chain.calls
+        puts  = chain.puts
+    except Exception as e:
+        logging.warning("Error fetching option chain for %s: %s", ticker_symbol, e)
+        return zero_acc
+
+    now = datetime.datetime.now(IST)
+    try:
+        exp_dt = datetime.datetime.strptime(exp, '%Y-%m-%d').replace(tzinfo=IST)
+        T = (exp_dt - now).total_seconds() / (365*24*3600)
+    except Exception:
+        logging.warning("Invalid expiry date format %s for %s", exp, ticker_symbol)
+        return zero_acc
+    # allocate
+    acc = {'ce_delta':0.0,'ce_vega':0.0,'ce_theta':0.0,'pe_delta':0.0,'pe_vega':0.0,'pe_theta':0.0}
+    # process calls and puts
+    for df, side in ((calls, 'CE'), (puts, 'PE')):
+        # if not a DataFrame, skip
+        if not isinstance(df, pd.DataFrame):
+            continue
+        for row in df.itertuples(index=False):
+            K = getattr(row, 'strike', None)
+            price = getattr(row, 'lastPrice', None)
+            iv = getattr(row, 'impliedVolatility', None)
+            if K is None or price is None or iv is None or T <= 0:
+                continue
+            # iv from yfinance is already decimal (e.g., 0.25)
+            delta, vega, theta = calculate_greeks(S, K, T, RISK_FREE_RATE, iv, side)
+            key_pref = side.lower()
+            if DELTA_MIN <= abs(delta) <= DELTA_MAX:
+                acc[f'{key_pref}_delta'] += delta
+                acc[f'{key_pref}_vega']  += vega
+                acc[f'{key_pref}_theta'] += theta
+    return acc
     """
     Fetch option chain using yfinance for given ticker.
     Returns dict with ce_delta, ce_vega, ce_theta, pe_delta, pe_vega, pe_theta.
