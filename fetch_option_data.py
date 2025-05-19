@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import json
 import time
@@ -86,7 +87,7 @@ def fetch_greeks_nse(index_symbol: str):
       results - dict accumulating delta/vega/theta sums
     """
     # get full chain
-    chain = nsepython.get_optionchain(index_symbol)
+    chain = option_chain(index_symbol)
     # extract underlying
     records = chain.get('records', {})
     S = records.get('underlyingValue')
