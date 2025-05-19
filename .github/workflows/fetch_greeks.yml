@@ -1,35 +1,35 @@
-name: 🔢 Fetch Option Greeks
+name: Fetch Option Greeks
 
+# Run every 15 minutes, and allow manual trigger
 on:
   schedule:
-    # Every 5 minutes during Indian market hours (09:15–15:30 IST → UTC 4:45–10:00)
-    - cron: '*/5 4-10 * * 1-5'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 jobs:
   fetch-greeks:
     runs-on: ubuntu-latest
-    env:
-      TZ: Asia/Kolkata
-      GCREDS:           ${{ secrets.GCREDS }}
-      TOKEN_SHEET_ID:   ${{ secrets.TOKEN_SHEET_ID }}
-      GREEKS_SHEET_ID:  ${{ secrets.GREEKS_SHEET_ID }}
-
     steps:
-      - name: ⬇️ Checkout repository
+      # 1. Checkout your code
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: 🤳 Set up Python 3.10
+      # 2. Set up Python
+      - name: Set up Python 3.10
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: 📦 Install dependencies
+      # 3. Install dependencies
+      - name: Install dependencies
         run: |
-          pip install pandas numpy scipy gspread oauth2client kiteconnect
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: ⏳ Run Greek Logger
-        run: python fetch_option_data.py
-
-      - name: ✅ Success
-        run: echo "Greeks have been logged to your GreeksData sheet."
+      # 4. Run your fetch script
+      - name: Fetch Option Greeks
+        run: python sentiment-tracker/fetch_option_data.py
+        env:
+          GCREDS:          ${{ secrets.GCREDS }}
+          GREEKS_SHEET_ID: ${{ secrets.GREEKS_SHEET_ID }}
+          TOKEN_SHEET_ID:  ${{ secrets.TOKEN_SHEET_ID }}
