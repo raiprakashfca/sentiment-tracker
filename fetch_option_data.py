@@ -1,15 +1,14 @@
 import os
 import json
-import time
 import logging
 import datetime
 import pytz
 import numpy as np
 import gspread
+import yfinance as yf
 from scipy.stats import norm
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread.exceptions import WorksheetNotFound
-from nsepython import option_chain
 
 # ----------------- Configuration -----------------
 GCREDS_ENV_VAR       = "GCREDS"
@@ -66,91 +65,72 @@ def authorize_sheets():
 
 # ----------------- Black-Scholes Greeks ------------
 def calculate_greeks(S, K, T, r, vol, flag):
-    d1 = (np.log(S/K) + (r + 0.5 * vol**2) * T) / (vol * np.sqrt(T))
-    d2 = d1 - vol * np.sqrt(T)
-    delta = norm.cdf(d1) if flag == 'CE' else -norm.cdf(-d1)
+    d1 = (np.log(S/K) + (r + 0.5*vol**2)*T) / (vol * np.sqrt(T))
+    d2 = d1 - vol*np.sqrt(T)
+    delta = norm.cdf(d1) if flag=='CE' else -norm.cdf(-d1)
     vega = S * norm.pdf(d1) * np.sqrt(T)
-    if flag == 'CE':
-        theta = -S * norm.pdf(d1) * vol/(2*np.sqrt(T)) - r * K * np.exp(-r*T) * norm.cdf(d2)
+    if flag=='CE':
+        theta = -S*norm.pdf(d1)*vol/(2*np.sqrt(T)) - r*K*np.exp(-r*T)*norm.cdf(d2)
     else:
-        theta = -S * norm.pdf(d1) * vol/(2*np.sqrt(T)) + r * K * np.exp(-r*T) * norm.cdf(-d2)
+        theta = -S*norm.pdf(d1)*vol/(2*np.sqrt(T)) + r*K*np.exp(-r*T)*norm.cdf(-d2)
     return delta, vega, theta
 
-# ----------------- Fetch via nsepython ----------------
-def fetch_greeks_nse(index_symbol: str):
+# ----------------- Fetch via yfinance ----------------
+def fetch_greeks_yf(ticker_symbol: str):
     """
-    Fetch CE/PE option chain via nsepython for given index (e.g. 'NIFTY', 'BANKNIFTY').
-    Returns:
-      S       - underlying level
-      acc     - dict accumulating delta/vega/theta sums
+    Fetch option chain using yfinance for given ticker.
+    Returns dict with ce_delta, ce_vega, ce_theta, pe_delta, pe_vega, pe_theta.
     """
-    # Try fetching the chain
-    try:
-        chain = option_chain(index_symbol)
-    except Exception as e:
-        # DEBUG: print exception from nsepython
-        print(f"DEBUG: option_chain raised exception for {index_symbol}: {e}")
-        empty_acc = {k: 0.0 for k in ['ce_delta','ce_vega','ce_theta','pe_delta','pe_vega','pe_theta']}
-        return None, empty_acc
-
-    # DEBUG: inspect chain keys
-    print(f"DEBUG: option_chain keys: {list(chain.keys())}")
-    records = chain.get('records', {})
-    print(f"DEBUG: records keys: {list(records.keys())}")
-    S = records.get('underlyingValue')
-    expiries = records.get('expiryDates', [])
-    if S is None or not expiries:
-        print(f"DEBUG: Missing underlying ({S}) or expiries ({expiries}) for {index_symbol}")
-        empty_acc = {k: 0.0 for k in ['ce_delta','ce_vega','ce_theta','pe_delta','pe_vega','pe_theta']}
-        return S, empty_acc
-
-    expiry = expiries[0]
-    opt_data = records.get('data', [])
-    print(f"DEBUG: opt_data length for {index_symbol}: {len(opt_data)}")
-    if opt_data:
-        print(f"DEBUG: first opt_data entry keys: {list(opt_data[0].keys())}")
-
-    # Initialize accumulator
-    acc = {k: 0.0 for k in ['ce_delta','ce_vega','ce_theta','pe_delta','pe_vega','pe_theta']}
+    tk = yf.Ticker(ticker_symbol)
+    info = tk.info
+    S = info.get('regularMarketPrice')
+    if S is None:
+        raise RuntimeError(f"Cannot fetch underlying price for {ticker_symbol}")
+    # choose nearest expiry
+    expiries = tk.options
+    if not expiries:
+        raise RuntimeError(f"No expiry dates for {ticker_symbol}")
+    exp = expiries[0]
+    chain = tk.option_chain(exp)
+    calls = chain.calls
+    puts  = chain.puts
     now = datetime.datetime.now(IST)
-    exp_dt = datetime.datetime.strptime(expiry, '%d-%b-%Y')
+    exp_dt = datetime.datetime.strptime(exp, '%Y-%m-%d').replace(tzinfo=IST)
     T = (exp_dt - now).total_seconds() / (365*24*3600)
-    if T <= 0:
-        print(f"DEBUG: Expiry {expiry} already passed for {index_symbol}")
-        return S, acc
-
-    # Compute Greeks
-    for rec in opt_data:
-        K = rec.get('strikePrice')
-        for side in ('CE','PE'):
-            opt = rec.get(side)
-            if not opt:
+    # allocate
+    acc = {'ce_delta':0.0,'ce_vega':0.0,'ce_theta':0.0,'pe_delta':0.0,'pe_vega':0.0,'pe_theta':0.0}
+    # process calls
+    for opt in [calls, puts]:
+        side = 'CE' if opt is calls else 'PE'
+        for row in opt.itertuples(index=False):
+            K = getattr(row, 'strike', None)
+            price = getattr(row, 'lastPrice', None)
+            iv = getattr(row, 'impliedVolatility', None)
+            if K is None or price is None or iv is None:
                 continue
-            price = opt.get('lastPrice')
-            iv = opt.get('impliedVolatility')
-            if not price or not iv:
-                continue
+            # iv from yfinance is decimal (e.g., 0.25)
             delta, vega, theta = calculate_greeks(S, K, T, RISK_FREE_RATE, iv, side)
             key_pref = side.lower()
             if DELTA_MIN <= abs(delta) <= DELTA_MAX:
                 acc[f'{key_pref}_delta'] += delta
                 acc[f'{key_pref}_vega']  += vega
                 acc[f'{key_pref}_theta'] += theta
-    return S, acc
+    return acc
 
 # ----------------- Write to Sheets ------------------
 def write_sheets(client, greeks_key, row):
-    book   = client.open_by_key(greeks_key)
-    log_ws = book.worksheet(LOG_SHEET_NAME)
-    open_ws= book.worksheet(OPEN_SHEET_NAME)
+    book    = client.open_by_key(greeks_key)
+    log_ws  = book.worksheet(LOG_SHEET_NAME)
+    open_ws = book.worksheet(OPEN_SHEET_NAME)
     vals = log_ws.get_all_values()
-    if not vals or vals[0] != HEADER:
+    if not vals or vals[0]!=HEADER:
         log_ws.clear()
         log_ws.append_row(HEADER)
     log_ws.append_row(row, value_input_option='USER_ENTERED')
-    cutoff = (datetime.datetime.now(IST) - datetime.timedelta(days=RETENTION_DAYS)).date()
+    # archive
+    cutoff = (datetime.datetime.now(IST)-datetime.timedelta(days=RETENTION_DAYS)).date()
     all_vals = log_ws.get_all_values()
-    archive = [r for r in all_vals[1:] if datetime.datetime.strptime(r[0], '%Y-%m-%d %H:%M:%S').date() < cutoff]
+    archive = [r for r in all_vals[1:] if datetime.datetime.strptime(r[0], '%Y-%m-%d %H:%M:%S').date()<cutoff]
     if archive:
         try:
             arc_ws = book.worksheet(ARCHIVE_SHEET_NAME)
@@ -158,37 +138,31 @@ def write_sheets(client, greeks_key, row):
             arc_ws = book.add_worksheet(ARCHIVE_SHEET_NAME, rows='100', cols=str(len(HEADER)))
             arc_ws.append_row(HEADER)
         arc_ws.append_rows(archive, value_input_option='USER_ENTERED')
-        for idx in range(len(all_vals), 1, -1):
+        for idx in range(len(all_vals),1,-1):
             rd = datetime.datetime.strptime(all_vals[idx-1][0], '%Y-%m-%d %H:%M:%S').date()
             if rd < cutoff:
                 log_ws.delete_row(idx)
     ov = open_ws.get_all_values()
     today = datetime.datetime.now(IST).strftime('%Y-%m-%d')
-    if len(ov) < 2 or not ov[1][0].startswith(today):
-        open_ws.clear()
-        open_ws.append_row(HEADER, value_input_option='USER_ENTERED')
-        open_ws.append_row(row, value_input_option='USER_ENTERED')
+    if len(ov)<2 or not ov[1][0].startswith(today):
+        open_ws.clear(); open_ws.append_row(HEADER); open_ws.append_row(row)
 
 # ----------------- Main ---------------------------
 def main():
     setup_logging()
-    logging.info('Starting fetch via nsepython')
+    logging.info('Starting fetch via yfinance')
     greeks_key, token_key = load_config()
     client = authorize_sheets()
-    names = {'nifty':'NIFTY','bn':'BANKNIFTY'}
+    tickers = {'nifty':'^NSEI','bn':'^NSEBANK'}
     now = datetime.datetime.now(IST)
     row = [now.strftime('%Y-%m-%d %H:%M:%S')]
-    for key, sym in names.items():
-        S, acc = fetch_greeks_nse(sym)
+    for key, sym in tickers.items():
+        acc = fetch_greeks_yf(sym)
         for side in ['ce','pe']:
-            row += [
-                round(acc.get(f'{side}_delta', 0), 4),
-                round(acc.get(f'{side}_vega', 0), 2),
-                round(acc.get(f'{side}_theta', 0), 2)
-            ]
-    print("DEBUG OUTPUT ROW:", row)
+            row += [round(acc[f'{side}_delta'],4), round(acc[f'{side}_vega'],2), round(acc[f'{side}_theta'],2)]
+    print('DEBUG OUTPUT ROW:', row)
     write_sheets(client, greeks_key, row)
-    logging.info('Completed fetch via nsepython')
+    logging.info('Completed fetch via yfinance')
 
-if __name__ == '__main__':
+if __name__=='__main__':
     main()
