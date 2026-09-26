@@ -148,15 +148,40 @@ async function main() {
 
   const { Client, LocalAuth } = require('whatsapp-web.js');
   const qrcode = require('qrcode-terminal');
+  const QRCode = require('qrcode');
+  const { exec } = require('child_process');
+
+  const browser = findBrowser();
+  console.log(`Starting browser${browser ? ` (${browser})` : ''}…`);
 
   const client = new Client({
     authStrategy: new LocalAuth({ dataPath: path.join(__dirname, '.wwebjs_auth') }),
-    puppeteer: { headless: true, executablePath: findBrowser(), args: ['--no-sandbox', '--disable-setuid-sandbox'] },
+    puppeteer: { headless: true, executablePath: browser, args: ['--no-sandbox', '--disable-setuid-sandbox'] },
   });
 
-  client.on('qr', (qr) => {
-    console.log('Scan this QR in WhatsApp → Settings → Linked devices → Link a device:');
+  // Text QR codes often render badly in PowerShell, so also save a PNG and open it.
+  const qrFile = path.join(__dirname, 'whatsapp-qr.png');
+  let qrOpened = false;
+  client.on('qr', async (qr) => {
+    console.log('\nScan this QR in WhatsApp → Settings → Linked devices → Link a device:');
     qrcode.generate(qr, { small: true });
+    try {
+      await QRCode.toFile(qrFile, qr, { width: 400, margin: 2 });
+      console.log(`Also saved as an image: ${qrFile}`);
+      if (!qrOpened) {
+        qrOpened = true;
+        const opener = process.platform === 'win32' ? 'start ""' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+        exec(`${opener} "${qrFile}"`);
+      }
+    } catch (err) {
+      console.error('Could not save the QR image:', err.message);
+    }
+    console.log('(The code refreshes every ~20 seconds; the image file updates too — reopen it if it expired.)');
+  });
+  client.on('loading_screen', (percent) => console.log(`Loading WhatsApp… ${percent}%`));
+  client.on('authenticated', () => {
+    console.log('Linked! Finishing login…');
+    fs.rmSync(qrFile, { force: true });
   });
   client.on('auth_failure', (m) => console.error('Auth failed:', m));
   client.on('disconnected', (r) => {
@@ -168,7 +193,16 @@ async function main() {
     loop(client);
   });
 
-  await client.initialize();
+  console.log('Opening WhatsApp Web (can take up to a minute the first time)…');
+  try {
+    await client.initialize();
+  } catch (err) {
+    console.error(`\nCould not start WhatsApp Web: ${err.message}`);
+    if (/executable|browser|chrome|launch/i.test(err.message)) {
+      console.error('No usable browser found. Install Google Chrome, or set "browserPath" in config.json to chrome.exe / msedge.exe.');
+    }
+    process.exit(1);
+  }
 }
 
 main();
