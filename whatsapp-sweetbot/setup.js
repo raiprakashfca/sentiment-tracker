@@ -20,7 +20,7 @@ const current = readExisting();
 current.timezone = current.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 const PRESETS = {
-  groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile', needsKey: true },
+  groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', needsKey: true, reasoningEffort: 'low' },
   ollama: { baseUrl: 'http://localhost:11434/v1', model: 'llama3.1', needsKey: false },
   lmstudio: { baseUrl: 'http://localhost:1234/v1', model: 'local-model', needsKey: false },
 };
@@ -52,6 +52,7 @@ async function main() {
     const p = PRESETS[choice];
     const sameProvider = current.llm?.baseUrl === p.baseUrl;
     const llm = { enabled: true, baseUrl: p.baseUrl, model: sameProvider ? current.llm.model : p.model, temperature: 1.0 };
+    if (p.reasoningEffort) llm.reasoningEffort = p.reasoningEffort;
     if (p.needsKey) {
       const shown = sameProvider && current.llm.apiKey ? `${current.llm.apiKey.slice(0, 8)}…` : '';
       const key = await ask('Paste your API key (starts with gsk_)', shown);

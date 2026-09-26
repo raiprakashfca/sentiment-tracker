@@ -23,8 +23,10 @@ function examples() {
 const recent = [];
 
 function clean(text) {
-  let t = (text || '')
-    .replace(/<think>[\s\S]*?<\/think>/g, '') // reasoning models
+  // Reasoning models: drop finished <think> blocks; an unfinished one means it ran out of tokens.
+  let t = (text || '').replace(/<think>[\s\S]*?<\/think>/g, '');
+  if (/<think>/.test(t)) return null;
+  t = t
     .trim()
     .split('\n')[0]
     .trim()
@@ -57,7 +59,8 @@ async function generateWithLLM({ llm, hour, name }) {
         model: llm.model,
         messages: [{ role: 'user', content: prompt }],
         temperature: llm.temperature ?? 1.0,
-        max_tokens: 400,
+        max_tokens: llm.maxTokens || 2000, // room for reasoning models to think first
+        ...(llm.reasoningEffort && { reasoning_effort: llm.reasoningEffort }),
       }),
       signal: AbortSignal.timeout((llm.timeoutSeconds || 120) * 1000),
     });
