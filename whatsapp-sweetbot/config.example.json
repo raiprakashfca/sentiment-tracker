@@ -4,6 +4,15 @@
   "minGapMinutes": 40,
   "maxGapMinutes": 95,
   "skipChance": 0.15,
-  "quietHours": { "start": 23, "end": 8 },
-  "timezone": "Asia/Kolkata"
+  "quietHours": {
+    "start": 23,
+    "end": 8
+  },
+  "timezone": "Asia/Kolkata",
+  "llm": {
+    "enabled": false,
+    "baseUrl": "http://localhost:11434/v1",
+    "model": "llama3.1",
+    "temperature": 1.0
+  }
 }

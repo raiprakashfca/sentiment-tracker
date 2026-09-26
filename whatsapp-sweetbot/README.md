@@ -43,6 +43,21 @@ it uses them. With fewer than about 25 it mixes in its built-in ones so it doesn
 
 `style.json` and the chat export are listed in `.gitignore`, so they stay on your machine.
 
+## Use a local LLM to write the messages (optional)
+Any local LLM app with an OpenAI-compatible server works. In `config.json`, set `llm.enabled` to `true` and fill in:
+
+| App | `baseUrl` | `model` |
+|---|---|---|
+| Ollama | `http://localhost:11434/v1` | name from `ollama list`, e.g. `llama3.1` |
+| LM Studio | `http://localhost:1234/v1` | model id shown in the Developer tab (start the server there) |
+| llama.cpp `llama-server` | `http://localhost:8080/v1` | anything |
+| Jan | `http://localhost:1337/v1` | model id from Jan's settings |
+
+If you've run `learn-style.js`, it shows the model 30 random phrases of yours so it copies your
+style. It tells the model the time of day and what it sent recently so it doesn't repeat. If the LLM
+is off, too slow, or replies with something unusable (too long, "Sure! Here's…", a repeat), that round
+uses the built-in messages instead. Everything stays on your PC.
+
 ## Caveats
 - This uses [whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js), an
   **unofficial** WhatsApp Web client. Automating a personal account breaks WhatsApp's

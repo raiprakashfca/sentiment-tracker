@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { buildMessage } = require('./messages');
+const { generateWithLLM } = require('./llm');
 
 const DRY_RUN = process.argv.includes('--dry-run');
 
@@ -73,7 +74,9 @@ async function loop(client) {
     }
 
     try {
-      await sendParts(client, chatId, buildMessage({ hour, name: config.recipientName }));
+      const args = { hour, name: config.recipientName };
+      const parts = (config.llm?.enabled && (await generateWithLLM({ llm: config.llm, ...args }))) || buildMessage(args);
+      await sendParts(client, chatId, parts);
     } catch (err) {
       console.error('Send failed:', err.message);
     }
