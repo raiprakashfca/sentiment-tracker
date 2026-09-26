@@ -10,17 +10,16 @@ const chance = (p) => Math.random() < p;
 const openers = ['', '', '', 'hey', 'heyy', 'hii', 'oye', 'psst', 'hey you'];
 
 const bodies = {
+  // The "Good Morning {name}" greeting itself is sent separately, once a day (see index.js).
   morning: [
-    'good morning {name}',
-    'gm {name}',
-    'morninggg',
     'woke up thinking about you',
+    'had breakfast?',
     'hope you slept well',
     'have a good day okay',
   ],
   day: [
     'miss you',
-    'missing you so much rn',
+    'missing you so much',
     'miss youuu',
     'thinking about you',
     'cant stop thinking about you',
@@ -47,7 +46,7 @@ const bodies = {
   ],
   night: [
     'sleep well {name}',
-    'good night',
+    'good night {name}',
     'gn, love you',
     'sweet dreams',
     'miss you, sleep tight',
@@ -117,16 +116,25 @@ function styleCase(text) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+// True if text contains any banned word/phrase (whole words, any case), or a
+// morning greeting outside the dedicated once-a-day greeting.
+function isBanned(text, neverSay = []) {
+  const lower = text.toLowerCase();
+  if (/good ?morning|\bgm\b/.test(lower)) return true;
+  return neverSay.some((w) => new RegExp(`(^|[^\\p{L}])${w.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\p{L}])`, 'u').test(lower));
+}
+
 // With only a few learned phrases, mix in built-in ones so it doesn't loop the same lines.
 const ownShare = style ? Math.min(0.9, style.all.length / 25) : 0;
 const recent = [];
 
-function buildMessage({ hour, name }) {
+function buildMessage({ hour, name, neverSay }) {
   let parts;
-  for (let tries = 0; tries < 8; tries++) {
+  for (let tries = 0; tries < 20; tries++) {
     parts = chance(ownShare) && (style.phrases[periodFor(hour)].length || style.anytime.length)
       ? buildFromStyle(hour)
       : buildGeneric({ hour, name });
+    if (parts.some((p) => isBanned(p, neverSay))) continue;
     const key = parts[0].replace(/\P{L}/gu, '').toLowerCase();
     if (!recent.includes(key)) {
       recent.push(key);
@@ -155,4 +163,4 @@ function buildGeneric({ hour, name }) {
   return parts;
 }
 
-module.exports = { buildMessage, periodFor };
+module.exports = { buildMessage, periodFor, isBanned };

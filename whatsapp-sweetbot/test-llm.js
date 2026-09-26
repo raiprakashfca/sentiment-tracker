@@ -4,7 +4,8 @@ const path = require('path');
 const { generateWithLLM } = require('./llm');
 
 async function main() {
-  const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
+  const read = (f) => JSON.parse(fs.readFileSync(path.join(__dirname, f), 'utf8'));
+  const config = { ...read('config.example.json'), ...read('config.json') };
   const { llm } = config;
   if (!llm || !llm.baseUrl || !llm.model) {
     console.error('Add an "llm" section with baseUrl and model to config.json first.');
@@ -14,7 +15,7 @@ async function main() {
 
   let ok = 0;
   for (const hour of [8, 13, 19, 22]) {
-    const parts = await generateWithLLM({ llm, hour, name: config.recipientName });
+    const parts = await generateWithLLM({ llm, hour, name: config.recipientName, myStyle: config.myStyle });
     if (parts) {
       ok++;
       console.log(`  ${String(hour).padStart(2, '0')}:00  ${parts[0]}`);

@@ -10,7 +10,11 @@ if (!fs.existsSync(configPath)) {
   console.error('Missing config.json — copy config.example.json to config.json and fill it in.');
   process.exit(1);
 }
-const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+// Settings missing from an older config.json fall back to config.example.json.
+const config = {
+  ...JSON.parse(fs.readFileSync(path.join(__dirname, 'config.example.json'), 'utf8')),
+  ...JSON.parse(fs.readFileSync(configPath, 'utf8')),
+};
 if (!DRY_RUN && !/^\d{10,15}$/.test(String(config.recipientNumber))) {
   console.error('Set her number in config.json first (run: npm run setup).');
   process.exit(1);
@@ -59,6 +63,24 @@ async function sendParts(client, chatId, parts) {
   }
 }
 
+// The first message of each morning is always your own greeting, e.g. "Good Morning Shona 😘😘".
+const statePath = path.join(__dirname, '.state.json');
+const readState = () => { try { return JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch { return {}; } };
+const today = () => new Date().toLocaleDateString('en-CA', { timeZone: config.timezone });
+
+let greetedOn = readState().greetedOn;
+
+function morningGreetingDue(hour) {
+  if (!config.morningGreeting || hour < 5 || hour >= 12 || greetedOn === today()) return null;
+  const kisses = (config.greetingEmoji || '😘').repeat(2 + Math.floor(Math.random() * 2));
+  return `${config.morningGreeting.replace('{name}', config.recipientName)} ${kisses}`;
+}
+
+function markGreeted() {
+  greetedOn = today();
+  if (!DRY_RUN) fs.writeFileSync(statePath, JSON.stringify({ ...readState(), greetedOn }));
+}
+
 async function loop(client) {
   const chatId = `${config.recipientNumber}@c.us`;
   for (;;) {
@@ -78,7 +100,13 @@ async function loop(client) {
     }
 
     try {
-      const args = { hour, name: config.recipientName };
+      const greeting = morningGreetingDue(hour);
+      if (greeting) {
+        await sendParts(client, chatId, [greeting]);
+        markGreeted();
+        continue;
+      }
+      const args = { hour, name: config.recipientName, neverSay: config.myStyle?.neverSay, myStyle: config.myStyle };
       const parts = (config.llm?.enabled && (await generateWithLLM({ llm: config.llm, ...args }))) || buildMessage(args);
       await sendParts(client, chatId, parts);
     } catch (err) {

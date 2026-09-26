@@ -4,10 +4,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const { periodFor } = require('./messages');
+const { periodFor, isBanned } = require('./messages');
 
 const PERIOD_HINT = {
-  morning: 'It is morning.',
+  morning: 'It is morning. I already said good morning today, so do not greet her again.',
   day: 'It is daytime; they are probably busy.',
   evening: 'It is evening.',
   night: 'It is late night, close to bedtime.',
@@ -37,14 +37,28 @@ function clean(text) {
   return t;
 }
 
-async function generateWithLLM({ llm, hour, name }) {
-  const shots = examples();
+async function generateWithLLM({ llm, hour, name, myStyle = {} }) {
+  const neverSay = myStyle.neverSay || [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const parts = await generateOnce({ llm, hour, name, myStyle });
+    if (!parts) return null;
+    if (!isBanned(parts[0], neverSay)) return parts;
+    console.error(`  LLM used a phrase you never say ("${parts[0]}") — retrying.`);
+    recent.pop();
+  }
+  return null;
+}
+
+async function generateOnce({ llm, hour, name, myStyle }) {
+  const shots = examples().filter((s) => !isBanned(s, myStyle.neverSay));
   const prompt = [
     `Write ONE short WhatsApp text to my girlfriend (I call her "${name}"), saying I miss her or am thinking of her.`,
     PERIOD_HINT[periodFor(hour)],
     shots.length
       ? `Match my texting style exactly — these are real messages I've sent her:\n${shots.map((s) => `- ${s}`).join('\n')}`
       : 'Write casually like a real person on their phone: short, mostly lowercase, 0-2 emoji.',
+    myStyle.notes?.length ? `How I text:\n${myStyle.notes.map((n) => `- ${n}`).join('\n')}` : '',
+    myStyle.neverSay?.length ? `Never use these words or phrases: ${myStyle.neverSay.map((w) => `"${w}"`).join(', ')}.` : '',
     recent.length ? `Don't repeat or closely paraphrase these recent ones:\n${recent.map((s) => `- ${s}`).join('\n')}` : '',
     'Under 12 words. Reply with the message text only — no quotes, no explanation.',
   ]

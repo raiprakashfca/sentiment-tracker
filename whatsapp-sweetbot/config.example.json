@@ -9,6 +9,19 @@
     "end": 8
   },
   "timezone": "Asia/Kolkata",
+  "morningGreeting": "Good Morning {name}",
+  "greetingEmoji": "😘",
+  "myStyle": {
+    "notes": [
+      "Write full words: \"you\" not \"u\". Don't use \"rn\"."
+    ],
+    "neverSay": [
+      "gm",
+      "thinking about u rn",
+      "u",
+      "rn"
+    ]
+  },
   "llm": {
     "enabled": false,
     "baseUrl": "http://localhost:11434/v1",

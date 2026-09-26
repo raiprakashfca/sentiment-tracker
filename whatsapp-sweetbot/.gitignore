@@ -4,3 +4,4 @@ config.json
 .wwebjs_cache/
 style.json
 *.txt
+.state.json

@@ -25,6 +25,21 @@ remove the linked device in your phone's WhatsApp or delete that folder.
 The bot has to keep running for messages to go out. Use a machine that is always on, such as a small
 VPS or a Raspberry Pi, with something like `pm2 start index.js`.
 
+## Your own habits
+In `config.json`:
+- `morningGreeting` / `greetingEmoji`: the first message each morning (between 5am and noon) is always
+  this, e.g. **"Good Morning Shona 😘😘"**, and it's sent only once a day. It's never sent as "gm".
+- `myStyle.neverSay`: words or phrases that are never sent (whole words, any case). A message
+  containing one is rejected and rewritten.
+- `myStyle.notes`: plain-English notes on how you text, passed to the LLM.
+
+```json
+"myStyle": {
+  "notes": ["Write full words: \"you\" not \"u\". Don't use \"rn\"."],
+  "neverSay": ["gm", "thinking about u rn", "u", "rn"]
+}
+```
+
 ## Teach it your texting style
 1. In WhatsApp, open her chat → ⋮ → More → **Export chat** → **Without media**, and copy the `.txt` file into this folder.
 2. Run:
