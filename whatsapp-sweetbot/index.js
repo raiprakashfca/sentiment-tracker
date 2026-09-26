@@ -64,7 +64,7 @@ async function loop(client) {
     await sleep(DRY_RUN ? 1000 : gap);
 
     const hour = localHour();
-    if (inQuietHours(hour)) {
+    if (inQuietHours(hour) && !DRY_RUN) {
       console.log('Quiet hours — skipping.');
       continue;
     }
