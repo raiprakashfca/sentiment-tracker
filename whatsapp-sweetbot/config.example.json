@@ -12,10 +12,12 @@
   "timezone": "Asia/Kolkata",
   "myStyle": {
     "notes": [
-      "Write full words: \"you\" not \"u\". Don't use \"rn\"."
+      "Write full words: \"you\" not \"u\". Don't use \"rn\".",
+      "Never start with \"hey\"."
     ],
     "neverSay": [
       "gm",
+      "hey",
       "thinking about u rn",
       "u",
       "rn"

@@ -7,7 +7,7 @@ const path = require('path');
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const chance = (p) => Math.random() < p;
 
-const openers = ['', '', '', 'hey', 'heyy', 'hii', 'oye', 'psst', 'hey you'];
+const openers = ['', '', '', 'hii', 'oye', 'psst'];
 
 const bodies = {
   // No "good morning" here: you greet her yourself, and the bot starts after that.
@@ -121,7 +121,11 @@ function styleCase(text) {
 function isBanned(text, neverSay = []) {
   const lower = text.toLowerCase();
   if (/good ?morning|\bgm\b/.test(lower)) return true;
-  return neverSay.some((w) => new RegExp(`(^|[^\\p{L}])${w.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\p{L}])`, 'u').test(lower));
+  // Whole words, any case, and stretched spellings too ("hey" also blocks "heyyy").
+  return neverSay.some((w) => {
+    const letters = [...w.toLowerCase()].map((c) => (/\p{L}/u.test(c) ? `${c}+` : c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    return new RegExp(`(^|[^\\p{L}])${letters.join('')}($|[^\\p{L}])`, 'u').test(lower);
+  });
 }
 
 // With only a few learned phrases, mix in built-in ones so it doesn't loop the same lines.

@@ -34,7 +34,7 @@ In `config.json`:
 ```json
 "myStyle": {
   "notes": ["Write full words: \"you\" not \"u\". Don't use \"rn\"."],
-  "neverSay": ["gm", "thinking about u rn", "u", "rn"]
+  "neverSay": ["gm", "hey", "thinking about u rn", "u", "rn"]
 }
 ```
 
