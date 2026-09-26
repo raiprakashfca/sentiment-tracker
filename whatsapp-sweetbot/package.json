@@ -4,6 +4,7 @@
   "description": "Sends affectionate WhatsApp messages at natural, randomised intervals",
   "main": "index.js",
   "scripts": {
+    "setup": "node setup.js",
     "start": "node index.js",
     "preview": "node index.js --dry-run",
     "test-llm": "node test-llm.js"

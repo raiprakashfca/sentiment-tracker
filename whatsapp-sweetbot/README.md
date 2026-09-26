@@ -14,7 +14,7 @@ randomised, human-looking intervals.
 ```bash
 cd whatsapp-sweetbot
 npm install
-cp config.example.json config.json   # set her number (country code, no +), name, timezone
+npm run setup                         # asks for her number, name, timezone, and LLM (optional)
 npm run preview                       # dry run: prints messages, sends nothing (Ctrl+C to stop)
 npm start                             # shows a QR code the first time
 ```
@@ -44,7 +44,8 @@ it uses them. With fewer than about 25 it mixes in its built-in ones so it doesn
 `style.json` and the chat export are listed in `.gitignore`, so they stay on your machine.
 
 ## Use a local LLM to write the messages (optional)
-Any local LLM app with an OpenAI-compatible server works. In `config.json`, set `llm.enabled` to `true` and fill in:
+Run `npm run setup` and choose `groq`, `ollama` or `lmstudio`, then check it with `npm run test-llm`.
+Any other OpenAI-compatible server works too. Set these in `config.json`:
 
 | App | `baseUrl` | `model` |
 |---|---|---|

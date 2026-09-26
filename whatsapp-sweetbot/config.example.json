@@ -1,6 +1,6 @@
 {
-  "recipientNumber": "919876543210",
-  "recipientName": "Baby",
+  "recipientNumber": "",
+  "recipientName": "Shona",
   "minGapMinutes": 40,
   "maxGapMinutes": 95,
   "skipChance": 0.15,

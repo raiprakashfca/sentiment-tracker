@@ -11,6 +11,10 @@ if (!fs.existsSync(configPath)) {
   process.exit(1);
 }
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+if (!DRY_RUN && !/^\d{10,15}$/.test(String(config.recipientNumber))) {
+  console.error('Set her number in config.json first (run: npm run setup).');
+  process.exit(1);
+}
 
 const rand = (min, max) => min + Math.random() * (max - min);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
