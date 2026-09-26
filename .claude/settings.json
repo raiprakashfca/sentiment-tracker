@@ -22,5 +22,30 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "ponytail@ponytail": true,
+    "ecc@ecc": true,
+    "atlassian@atlassian": true
+  },
+  "extraKnownMarketplaces": {
+    "ponytail": {
+      "source": {
+        "source": "github",
+        "repo": "DietrichGebert/ponytail"
+      }
+    },
+    "ecc": {
+      "source": {
+        "source": "github",
+        "repo": "affaan-m/ECC"
+      }
+    },
+    "atlassian": {
+      "source": {
+        "source": "github",
+        "repo": "atlassian/atlassian-mcp-server"
+      }
+    }
   }
 }
