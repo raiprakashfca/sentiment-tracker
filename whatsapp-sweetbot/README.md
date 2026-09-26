@@ -23,6 +23,11 @@ The panel shows what the bot is doing and when the next message is due. It has b
 Keep the black `Start Sweetbot` window open (minimise it). Closing it stops the bot. To get a newer version,
 double-click **`Update Sweetbot.bat`**, then stop the bot and start it again.
 
+**Start with Windows:** tick **"Start Sweetbot by itself when I turn on / log in to this PC"** at the
+top of Settings. It then runs hidden in the background after every login (no black window) and
+reconnects by itself if the internet or WhatsApp drops. Open the panel at http://localhost:3737. What
+it did is also written to `sweetbot.log` in this folder.
+
 (Mac/Linux: `npm install && npm start`.)
 
 ## Your own habits

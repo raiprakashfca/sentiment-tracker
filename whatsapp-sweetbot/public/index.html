@@ -124,6 +124,12 @@
     <h2>Settings</h2>
     <form id="settings">
       <fieldset>
+        <legend>This PC</legend>
+        <label class="check" style="grid-column:1/-1"><input type="checkbox" id="autostart"> Start Sweetbot by itself when I turn on / log in to this PC</label>
+        <span class="hint" id="autostartHint" style="grid-column:1/-1">It runs quietly in the background with no window. Open this page any time at <b>http://localhost:3737</b> (bookmark it) or by double-clicking Start Sweetbot. Use <b>Stop bot</b> here to turn it off until next start-up.</span>
+      </fieldset>
+
+      <fieldset>
         <legend>Her</legend>
         <label>What you call her <input name="recipientName" required maxlength="40"></label>
         <label>Her WhatsApp number <input name="recipientNumber" inputmode="numeric" placeholder="91 98123 45678"><span class="hint">Country code first, e.g. 91 for India.</span></label>
@@ -336,6 +342,26 @@ form.addEventListener('submit', async (ev) => {
     toast('Saved ✓');
     refresh();
   } catch (e) { toast(e.message); }
+});
+
+// ---- Auto-start (applies immediately, no Save needed) ----
+const autostartBox = $('#autostart');
+api('/api/autostart').then((a) => {
+  autostartBox.checked = a.enabled;
+  if (!a.supported) {
+    autostartBox.disabled = true;
+    $('#autostartHint').textContent = 'Only available on Windows.';
+  }
+}).catch(() => {});
+autostartBox.addEventListener('change', async () => {
+  try {
+    const { enabled } = await api('/api/autostart', { enabled: autostartBox.checked });
+    autostartBox.checked = enabled;
+    toast(enabled ? 'Sweetbot will start by itself when the PC starts ✓' : 'Auto-start turned off');
+  } catch (e) {
+    autostartBox.checked = !autostartBox.checked;
+    toast(e.message);
+  }
 });
 
 api('/api/settings').then(fillSettings).catch(() => {});

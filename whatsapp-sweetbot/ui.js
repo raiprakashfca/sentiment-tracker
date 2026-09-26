@@ -71,7 +71,7 @@ function applySettings(config, body) {
   };
 }
 
-function startUI({ port, config, saveConfig, getStatus, pause, resume, preview, stop }) {
+function startUI({ port, config, saveConfig, getStatus, pause, resume, autostart, preview, stop }) {
   const allowedHosts = new Set([`localhost:${port}`, `127.0.0.1:${port}`]);
 
   const send = (res, code, data) => {
@@ -108,6 +108,9 @@ function startUI({ port, config, saveConfig, getStatus, pause, resume, preview, 
       }
       if (req.method === 'GET' && url.pathname === '/api/status') return send(res, 200, getStatus());
       if (req.method === 'GET' && url.pathname === '/api/settings') return send(res, 200, publicSettings(config));
+      if (req.method === 'GET' && url.pathname === '/api/autostart') {
+        return send(res, 200, { supported: autostart.supported, enabled: autostart.supported && autostart.get() });
+      }
 
       if (req.method === 'POST') {
         const body = await readBody(req);
@@ -117,6 +120,8 @@ function startUI({ port, config, saveConfig, getStatus, pause, resume, preview, 
             return send(res, 200, { ok: true, settings: publicSettings(config) });
           case '/api/pause':
             return send(res, 200, { ok: true, message: pause(body.minutes === 'today' ? 'today' : Number(body.minutes) || 'forever') });
+          case '/api/autostart':
+            return send(res, 200, { ok: true, enabled: autostart.set(!!body.enabled) });
           case '/api/resume':
             return send(res, 200, { ok: true, message: resume() });
           case '/api/preview':

@@ -4,6 +4,7 @@ const { exec } = require('child_process');
 const { buildMessage } = require('./messages');
 const { generateWithLLM, llmLastError } = require('./llm');
 const { startUI } = require('./ui');
+const autostart = require('./autostart');
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const NO_BROWSER = process.argv.includes('--no-browser');
@@ -36,11 +37,20 @@ const hasNumber = () => /^\d{10,15}$/.test(String(config.recipientNumber));
 const herChatId = () => `${config.recipientNumber}@c.us`;
 
 // ---- Activity log (shown in the control panel) ----------------------------------
+// Also written to sweetbot.log, since with auto-start there's no window to read.
 const events = [];
+const logPath = path.join(__dirname, 'sweetbot.log');
+try {
+  if (fs.statSync(logPath).size > 1_000_000) fs.rmSync(logPath);
+} catch {}
+
 function log(text, kind = 'info') {
   console.log(text);
   events.push({ t: Date.now(), text, kind });
   if (events.length > 200) events.shift();
+  try {
+    fs.appendFileSync(logPath, `${new Date().toISOString()}  ${text}\n`);
+  } catch {}
 }
 
 let lastStatus = '';
@@ -198,7 +208,8 @@ function friendlyLLMError(e = '') {
   return e.replace(/^HTTP \d+ /, '').slice(0, 140) || 'unknown error';
 }
 
-async function sendParts(client, parts) {
+async function sendParts(parts) {
+  const client = activeClient;
   for (const part of parts) {
     if (DRY_RUN) {
       log(`[preview] would send: ${part}`, 'sent');
@@ -216,7 +227,7 @@ async function sendParts(client, parts) {
   }
 }
 
-async function loop(client) {
+async function loop() {
   for (;;) {
     await sleep(DRY_RUN ? 300 : Number(process.env.SWEETBOT_POLL_MS) || 20000);
     const d = describe();
@@ -238,7 +249,7 @@ async function loop(client) {
     }
     try {
       const { parts } = await writeMessage(localHour());
-      await sendParts(client, parts);
+      await sendParts(parts);
       status(`Next message around ${timeStr(nextSendAt)}.`);
     } catch (err) {
       log(`Send failed: ${err.message}`, 'error');
@@ -280,6 +291,21 @@ function openInBrowser(target) {
 // ---- WhatsApp -----------------------------------------------------------------------
 // state: starting → qr → linked → ready (or disconnected / error)
 const wa = { state: DRY_RUN ? 'preview' : 'starting', qr: null, error: null };
+let activeClient = null;
+let loopStarted = false;
+let restartTimer = null;
+
+// Reconnect on its own: at PC start-up the internet may not be ready yet, and
+// WhatsApp occasionally drops linked devices. If you unlinked it, a new QR appears.
+function restartWhatsApp(client, delayMs) {
+  if (restartTimer) return;
+  log(`Reconnecting to WhatsApp in ${Math.round(delayMs / 1000)} seconds…`);
+  restartTimer = setTimeout(async () => {
+    restartTimer = null;
+    try { await client.destroy(); } catch {}
+    startWhatsApp();
+  }, delayMs);
+}
 
 async function startWhatsApp() {
   const { Client, LocalAuth } = require('whatsapp-web.js');
@@ -311,8 +337,9 @@ async function startWhatsApp() {
   });
   client.on('disconnected', (r) => {
     wa.state = 'disconnected';
-    wa.error = `WhatsApp disconnected (${r}). Restart the bot to link again.`;
+    wa.error = r === 'LOGOUT' ? 'WhatsApp was unlinked from your phone — a new QR code will appear here.' : `WhatsApp disconnected (${r}).`;
     log(wa.error, 'error');
+    restartWhatsApp(client, 15e3);
   });
 
   const herIds = new Set();
@@ -363,10 +390,14 @@ async function startWhatsApp() {
   });
 
   client.on('ready', () => {
+    activeClient = client;
     wa.state = 'ready';
     wa.error = null;
     log('WhatsApp is ready.', 'status');
-    loop(client);
+    if (!loopStarted) {
+      loopStarted = true;
+      loop();
+    }
   });
 
   try {
@@ -374,10 +405,12 @@ async function startWhatsApp() {
   } catch (err) {
     wa.state = 'error';
     wa.error = `Could not start WhatsApp Web: ${err.message}`;
-    if (/executable|browser|chrome|launch/i.test(err.message)) {
+    if (/executable|browser|chrome|launch/i.test(err.message) && !/net::|timeout/i.test(err.message)) {
       wa.error += ' — no usable browser found. Install Google Chrome, or set "browserPath" in config.json.';
+      return log(wa.error, 'error');
     }
     log(wa.error, 'error');
+    restartWhatsApp(client, 60e3); // most likely no internet yet
   }
 }
 
@@ -399,6 +432,15 @@ async function main() {
       }),
       pause,
       resume,
+      autostart: {
+        supported: autostart.supported(),
+        get: () => autostart.isEnabled(),
+        set: (on) => {
+          const now = autostart.setEnabled(on);
+          log(now ? 'Sweetbot will start by itself when you log in to Windows.' : 'Auto-start turned off.', 'status');
+          return now;
+        },
+      },
       preview: async () => {
         const hour = localHour();
         const out = [];
@@ -424,7 +466,7 @@ async function main() {
 
   if (DRY_RUN) {
     log('Preview mode: messages are shown here, nothing is sent.', 'status');
-    return loop(null);
+    return loop();
   }
   startWhatsApp();
 }
