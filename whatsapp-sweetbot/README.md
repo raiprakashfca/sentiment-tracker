@@ -6,7 +6,7 @@ randomised, human-looking intervals.
 ## How it behaves
 - **Timing:** it waits a random 40–95 minutes between messages (around an hour on average, bunched toward the middle of the range), and adds random seconds on top.
 - **Skips:** about 15% of rounds are skipped at random, so there's no fixed rhythm.
-- **Quiet hours:** it sends nothing between 23:00 and 08:00 (you can change this).
+- **Starts when you do:** nothing is sent each day until you've texted her yourself, and nothing after 11pm.
 - **Time of day:** morning, day, evening and night each have their own messages.
 - **Typing like a person:** it shows "typing…" for as long as the text would take to type, mostly writes in lowercase, sometimes stretches words ("youuu"), picks emoji at random, and now and then sends a quick follow-up text.
 
@@ -27,8 +27,6 @@ VPS or a Raspberry Pi, with something like `pm2 start index.js`.
 
 ## Your own habits
 In `config.json`:
-- `morningGreeting` / `greetingEmoji`: the first message each morning (between 5am and noon) is always
-  this, e.g. **"Good Morning Shona 😘😘"**, and it's sent only once a day. It's never sent as "gm".
 - `myStyle.neverSay`: words or phrases that are never sent (whole words, any case). A message
   containing one is rejected and rewritten.
 - `myStyle.notes`: plain-English notes on how you text, passed to the LLM.
@@ -39,6 +37,30 @@ In `config.json`:
   "neverSay": ["gm", "thinking about u rn", "u", "rn"]
 }
 ```
+
+## It starts after you text her
+With `"startAfterMyFirstMessage": true` (the default), the bot sends nothing each day until **you've
+texted her yourself** from your phone, for example your own good morning. If you wake up late, it
+starts late. After that it sends at random gaps until bedtime (`quietHours.start`, 11pm by default).
+The day resets at 4am.
+
+Whenever either of you texts in her chat, the bot waits for a new random gap before its next message,
+so it never butts into a real conversation.
+
+## Pause it any time
+Text these to **yourself** on WhatsApp (the "Message yourself" chat), or type them without `bot` in
+the bot's window:
+
+| Command | What it does |
+|---|---|
+| `bot pause` | pause until you resume |
+| `bot pause 2h` / `bot pause 30m` | pause for a while |
+| `bot pause today` | pause until tomorrow |
+| `bot resume` | start again |
+| `bot status` | what it's doing / when the next message is |
+
+The bot replies in that chat with 🤖. The pause survives restarts. Commands typed in any other
+chat are ignored.
 
 ## Teach it your texting style
 1. In WhatsApp, open her chat → ⋮ → More → **Export chat** → **Without media**, and copy the `.txt` file into this folder.

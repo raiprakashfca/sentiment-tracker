@@ -47,6 +47,8 @@ function typingMs(text) {
   return Math.min(12000, 1200 + text.length * rand(120, 220));
 }
 
+const botSent = new Set();
+
 async function sendParts(client, chatId, parts) {
   for (const part of parts) {
     if (DRY_RUN) {
@@ -57,62 +59,132 @@ async function sendParts(client, chatId, parts) {
     await chat.sendStateTyping();
     await sleep(typingMs(part));
     await chat.clearState();
+    botSent.add(part);
     await client.sendMessage(chatId, part);
     console.log(`  sent: ${part}`);
     await sleep(rand(2000, 7000));
   }
 }
 
-// The first message of each morning is always your own greeting, e.g. "Good Morning Shona 😘😘".
+// ---- Day / pause state (persisted so a restart doesn't forget) ----------------
 const statePath = path.join(__dirname, '.state.json');
 const readState = () => { try { return JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch { return {}; } };
-const today = () => new Date().toLocaleDateString('en-CA', { timeZone: config.timezone });
+const state = readState();
+const saveState = () => DRY_RUN || fs.writeFileSync(statePath, JSON.stringify(state));
 
-let greetedOn = readState().greetedOn;
+// A "day" runs from 4am to 4am, so texting her at 1am still counts as last night.
+const DAY_STARTS_AT = 4;
+const dayKey = () =>
+  new Date(Date.now() - DAY_STARTS_AT * 3600e3).toLocaleDateString('en-CA', { timeZone: config.timezone });
+const timeStr = (ms) => new Date(ms).toLocaleTimeString('en-GB', { timeZone: config.timezone, hour: '2-digit', minute: '2-digit' });
 
-function morningGreetingDue(hour) {
-  if (!config.morningGreeting || hour < 5 || hour >= 12 || greetedOn === today()) return null;
-  const kisses = (config.greetingEmoji || '😘').repeat(2 + Math.floor(Math.random() * 2));
-  return `${config.morningGreeting.replace('{name}', config.recipientName)} ${kisses}`;
+const waitForMe = config.startAfterMyFirstMessage !== false;
+let nextSendAt = null;
+let lastStatus = '';
+
+function status(text) {
+  if (text !== lastStatus) console.log(text);
+  lastStatus = text;
 }
 
-function markGreeted() {
-  greetedOn = today();
-  if (!DRY_RUN) fs.writeFileSync(statePath, JSON.stringify({ ...readState(), greetedOn }));
+function isPaused() {
+  if (!state.pausedUntil) return false;
+  if (state.pausedUntil !== 'forever' && Date.now() >= state.pausedUntil) {
+    delete state.pausedUntil;
+    saveState();
+    console.log('Pause is over — resuming.');
+    return false;
+  }
+  return true;
 }
 
-async function loop(client) {
-  const chatId = `${config.recipientNumber}@c.us`;
+// Someone texted in her chat (you by hand, or her): the bot backs off for a fresh
+// random gap, so it never cuts into a real conversation.
+function onChatActivity(fromMe) {
+  if (fromMe && state.awakeOn !== dayKey()) {
+    state.awakeOn = dayKey();
+    saveState();
+    console.log(`You texted ${config.recipientName} — bot starts for today.`);
+  }
+  if (state.awakeOn === dayKey()) {
+    nextSendAt = Math.max(nextSendAt || 0, Date.now() + nextGapMs());
+    console.log(`Chat activity — next bot message not before ${timeStr(nextSendAt)}`);
+  }
+}
+
+// "pause", "pause 2h", "pause 30m", "pause today", "resume", "status"
+function handleCommand(text) {
+  const [cmd, arg = ''] = text.trim().toLowerCase().split(/\s+/);
+  if (cmd === 'pause' || cmd === 'stop') {
+    const m = arg.match(/^(\d+(?:\.\d+)?)\s*(h|m)/);
+    if (m) state.pausedUntil = Date.now() + Number(m[1]) * (m[2] === 'h' ? 3600e3 : 60e3);
+    else if (arg === 'today') {
+      const hoursLeft = 24 - ((localHour() - DAY_STARTS_AT + 24) % 24); // until 4am
+      state.pausedUntil = Date.now() + hoursLeft * 3600e3;
+    } else state.pausedUntil = 'forever';
+    saveState();
+    return state.pausedUntil === 'forever' ? 'Paused until you say "bot resume".' : `Paused until ${timeStr(state.pausedUntil)}.`;
+  }
+  if (cmd === 'resume' || cmd === 'start') {
+    delete state.pausedUntil;
+    saveState();
+    return 'Resumed.';
+  }
+  if (cmd === 'status') {
+    if (isPaused()) return state.pausedUntil === 'forever' ? 'Paused (until you resume).' : `Paused until ${timeStr(state.pausedUntil)}.`;
+    if (waitForMe && state.awakeOn !== dayKey()) return `Running — waiting for your first message to ${config.recipientName} today.`;
+    return nextSendAt ? `Running — next message around ${timeStr(nextSendAt)}.` : 'Running.';
+  }
+  return 'Commands: pause, pause 2h, pause 30m, pause today, resume, status';
+}
+
+function canSendNow(hour) {
+  if (isPaused()) return status('Paused.'), false;
+  if (DRY_RUN) return true;
+  if (waitForMe) {
+    if (state.awakeOn !== dayKey()) return status(`Waiting for your first message to ${config.recipientName} today…`), false;
+    // After you're up, only bedtime applies (quietHours.start until 4am).
+    if (hour >= config.quietHours.start || hour < DAY_STARTS_AT) return status('Bedtime — done for today.'), false;
+    return true;
+  }
+  if (inQuietHours(hour)) return status('Quiet hours.'), false;
+  return true;
+}
+
+async function loop(client, chatId) {
   for (;;) {
-    const gap = nextGapMs();
-    const at = new Date(Date.now() + gap);
-    console.log(`Next check at ${at.toLocaleTimeString('en-GB', { timeZone: config.timezone })}`);
-    await sleep(DRY_RUN ? 1000 : gap);
-
+    await sleep(DRY_RUN ? 300 : Number(process.env.SWEETBOT_POLL_MS) || 20000);
     const hour = localHour();
-    if (inQuietHours(hour) && !DRY_RUN) {
-      console.log('Quiet hours — skipping.');
-      continue;
-    }
-    if (Math.random() < config.skipChance) {
-      console.log('Randomly skipping this round (people get busy).');
-      continue;
-    }
+    if (!canSendNow(hour)) continue;
 
+    if (!nextSendAt) {
+      nextSendAt = Date.now() + (DRY_RUN ? 1000 : nextGapMs());
+      status(`Next message around ${timeStr(nextSendAt)}`);
+    }
+    if (Date.now() < nextSendAt) continue;
+    nextSendAt = Date.now() + (DRY_RUN ? 1000 : nextGapMs());
+
+    if (Math.random() < config.skipChance) {
+      status(`Skipping this one (people get busy). Next around ${timeStr(nextSendAt)}`);
+      continue;
+    }
     try {
-      const greeting = morningGreetingDue(hour);
-      if (greeting) {
-        await sendParts(client, chatId, [greeting]);
-        markGreeted();
-        continue;
-      }
       const args = { hour, name: config.recipientName, neverSay: config.myStyle?.neverSay, myStyle: config.myStyle };
       const parts = (config.llm?.enabled && (await generateWithLLM({ llm: config.llm, ...args }))) || buildMessage(args);
       await sendParts(client, chatId, parts);
+      status(`Next message around ${timeStr(nextSendAt)}`);
     } catch (err) {
       console.error('Send failed:', err.message);
     }
   }
+}
+
+// Typing commands into this window works too: pause / pause 2h / resume / status
+function listenToKeyboard() {
+  if (!process.stdin.isTTY) return;
+  const rl = require('readline').createInterface({ input: process.stdin });
+  rl.on('line', (line) => line.trim() && console.log(handleCommand(line.replace(/^bot\s+/i, ''))));
+  console.log('Type "pause", "pause 2h", "resume" or "status" here any time.');
 }
 
 // Puppeteer's own Chrome download is sometimes blocked (e.g. npm's allow-scripts),
@@ -142,8 +214,9 @@ function findBrowser() {
 
 async function main() {
   if (DRY_RUN) {
-    console.log('Dry run: printing messages instead of sending them.\n');
-    return loop(null);
+    console.log('Dry run: printing messages instead of sending them (assumes you are awake).\n');
+    listenToKeyboard();
+    return loop(null, null);
   }
 
   const { Client, LocalAuth } = require('whatsapp-web.js');
@@ -188,9 +261,53 @@ async function main() {
     console.error('Disconnected:', r);
     process.exit(1);
   });
+  const chatId = `${config.recipientNumber}@c.us`;
+  const herIds = new Set([chatId]);
+
+  // WhatsApp sometimes uses other ids (e.g. @lid) for the same chat, so match by number too.
+  async function isHerChat(msg) {
+    const other = msg.fromMe ? msg.to : msg.from;
+    if (herIds.has(other)) return true;
+    if (other.endsWith('@g.us')) return false;
+    try {
+      const chat = await msg.getChat();
+      if (chat.isGroup) return false;
+      const contact = await chat.getContact();
+      if (String(contact.number) === String(config.recipientNumber) || chat.id.user === String(config.recipientNumber)) {
+        herIds.add(other);
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
+  client.on('message_create', async (msg) => {
+    try {
+      if (msg.type !== 'chat' && !msg.hasMedia) return;
+      const body = msg.body || '';
+
+      // "bot pause" etc. typed in your own "Message yourself" chat.
+      const toSelf = msg.from === msg.to || msg.to === client.info?.wid?._serialized;
+      if (msg.fromMe && toSelf && /^bot\b/i.test(body)) {
+        const reply = handleCommand(body.replace(/^bot\s*/i, ''));
+        console.log(`[command] ${body} → ${reply}`);
+        await msg.reply(`🤖 ${reply}`);
+        return;
+      }
+
+      if (!(await isHerChat(msg))) return;
+      if (msg.fromMe && botSent.delete(body)) return; // the bot's own message
+      onChatActivity(msg.fromMe);
+    } catch (err) {
+      console.error('Could not read an incoming message:', err.message);
+    }
+  });
+
   client.on('ready', () => {
     console.log('Logged in. Starting.');
-    loop(client);
+    console.log(`Text "bot pause", "bot pause 2h", "bot resume" or "bot status" to yourself on WhatsApp to control it.`);
+    listenToKeyboard();
+    loop(client, chatId);
   });
 
   console.log('Opening WhatsApp Web (can take up to a minute the first time)…');

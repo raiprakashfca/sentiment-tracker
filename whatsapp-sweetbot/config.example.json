@@ -4,13 +4,12 @@
   "minGapMinutes": 40,
   "maxGapMinutes": 95,
   "skipChance": 0.15,
+  "startAfterMyFirstMessage": true,
   "quietHours": {
     "start": 23,
     "end": 8
   },
   "timezone": "Asia/Kolkata",
-  "morningGreeting": "Good Morning {name}",
-  "greetingEmoji": "😘",
   "myStyle": {
     "notes": [
       "Write full words: \"you\" not \"u\". Don't use \"rn\"."

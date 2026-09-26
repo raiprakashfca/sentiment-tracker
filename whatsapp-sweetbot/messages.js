@@ -10,7 +10,7 @@ const chance = (p) => Math.random() < p;
 const openers = ['', '', '', 'hey', 'heyy', 'hii', 'oye', 'psst', 'hey you'];
 
 const bodies = {
-  // The "Good Morning {name}" greeting itself is sent separately, once a day (see index.js).
+  // No "good morning" here: you greet her yourself, and the bot starts after that.
   morning: [
     'woke up thinking about you',
     'had breakfast?',
@@ -117,7 +117,7 @@ function styleCase(text) {
 }
 
 // True if text contains any banned word/phrase (whole words, any case), or a
-// morning greeting outside the dedicated once-a-day greeting.
+// morning greeting (you send that one yourself).
 function isBanned(text, neverSay = []) {
   const lower = text.toLowerCase();
   if (/good ?morning|\bgm\b/.test(lower)) return true;
@@ -136,7 +136,8 @@ function buildMessage({ hour, name, neverSay }) {
       : buildGeneric({ hour, name });
     if (parts.some((p) => isBanned(p, neverSay))) continue;
     const key = parts[0].replace(/\P{L}/gu, '').toLowerCase();
-    if (!recent.includes(key)) {
+    // "hope you slept well" and "hey you hope you slept well" count as the same message.
+    if (!recent.some((r) => r.includes(key) || key.includes(r))) {
       recent.push(key);
       if (recent.length > 6) recent.shift();
       break;
