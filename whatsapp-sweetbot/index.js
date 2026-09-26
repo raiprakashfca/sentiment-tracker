@@ -1,25 +1,55 @@
 const fs = require('fs');
 const path = require('path');
+const { exec } = require('child_process');
 const { buildMessage } = require('./messages');
-const { generateWithLLM } = require('./llm');
+const { generateWithLLM, llmLastError } = require('./llm');
+const { startUI } = require('./ui');
 
 const DRY_RUN = process.argv.includes('--dry-run');
+const NO_BROWSER = process.argv.includes('--no-browser');
 
+// ---- Config -------------------------------------------------------------------
 const configPath = path.join(__dirname, 'config.json');
-if (!fs.existsSync(configPath)) {
-  console.error('Missing config.json — copy config.example.json to config.json and fill it in.');
-  process.exit(1);
-}
-// Settings missing from an older config.json fall back to config.example.json.
-const config = {
-  ...JSON.parse(fs.readFileSync(path.join(__dirname, 'config.example.json'), 'utf8')),
-  ...JSON.parse(fs.readFileSync(configPath, 'utf8')),
-};
-if (!DRY_RUN && !/^\d{10,15}$/.test(String(config.recipientNumber))) {
-  console.error('Set her number in config.json first (run: npm run setup).');
-  process.exit(1);
+const examplePath = path.join(__dirname, 'config.example.json');
+const readJson = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
+
+function loadConfig() {
+  const defaults = readJson(examplePath);
+  if (!fs.existsSync(configPath)) return defaults;
+  try {
+    // Settings missing from an older config.json fall back to config.example.json.
+    return { ...defaults, ...readJson(configPath) };
+  } catch {
+    console.error('config.json is not valid JSON — using defaults until you save settings.');
+    return defaults;
+  }
 }
 
+const config = loadConfig();
+
+function saveConfig(patch) {
+  Object.assign(config, patch);
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+}
+
+const hasNumber = () => /^\d{10,15}$/.test(String(config.recipientNumber));
+const herChatId = () => `${config.recipientNumber}@c.us`;
+
+// ---- Activity log (shown in the control panel) ----------------------------------
+const events = [];
+function log(text, kind = 'info') {
+  console.log(text);
+  events.push({ t: Date.now(), text, kind });
+  if (events.length > 200) events.shift();
+}
+
+let lastStatus = '';
+function status(text) {
+  if (text !== lastStatus) log(text, 'status');
+  lastStatus = text;
+}
+
+// ---- Timing helpers -------------------------------------------------------------
 const rand = (min, max) => min + Math.random() * (max - min);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -47,55 +77,54 @@ function typingMs(text) {
   return Math.min(12000, 1200 + text.length * rand(120, 220));
 }
 
-const botSent = new Set();
-
-async function sendParts(client, chatId, parts) {
-  for (const part of parts) {
-    if (DRY_RUN) {
-      console.log(`  [dry-run] would send: ${part}`);
-      continue;
-    }
-    const chat = await client.getChatById(chatId);
-    await chat.sendStateTyping();
-    await sleep(typingMs(part));
-    await chat.clearState();
-    botSent.add(part);
-    await client.sendMessage(chatId, part);
-    console.log(`  sent: ${part}`);
-    await sleep(rand(2000, 7000));
-  }
-}
+const timeStr = (ms) =>
+  new Date(ms).toLocaleTimeString('en-GB', { timeZone: config.timezone, hour: '2-digit', minute: '2-digit' });
 
 // ---- Day / pause state (persisted so a restart doesn't forget) ----------------
 const statePath = path.join(__dirname, '.state.json');
-const readState = () => { try { return JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch { return {}; } };
-const state = readState();
+const state = (() => { try { return readJson(statePath); } catch { return {}; } })();
 const saveState = () => DRY_RUN || fs.writeFileSync(statePath, JSON.stringify(state));
 
 // A "day" runs from 4am to 4am, so texting her at 1am still counts as last night.
 const DAY_STARTS_AT = 4;
 const dayKey = () =>
   new Date(Date.now() - DAY_STARTS_AT * 3600e3).toLocaleDateString('en-CA', { timeZone: config.timezone });
-const timeStr = (ms) => new Date(ms).toLocaleTimeString('en-GB', { timeZone: config.timezone, hour: '2-digit', minute: '2-digit' });
 
-const waitForMe = config.startAfterMyFirstMessage !== false;
+const waitForMe = () => config.startAfterMyFirstMessage !== false;
+const awakeToday = () => DRY_RUN || state.awakeOn === dayKey();
 let nextSendAt = null;
-let lastStatus = '';
-
-function status(text) {
-  if (text !== lastStatus) console.log(text);
-  lastStatus = text;
-}
 
 function isPaused() {
   if (!state.pausedUntil) return false;
   if (state.pausedUntil !== 'forever' && Date.now() >= state.pausedUntil) {
     delete state.pausedUntil;
     saveState();
-    console.log('Pause is over — resuming.');
+    log('Pause is over — resuming.', 'status');
     return false;
   }
   return true;
+}
+
+function pause(what) {
+  if (what === 'today') {
+    const hoursLeft = 24 - ((localHour() - DAY_STARTS_AT + 24) % 24); // until 4am
+    state.pausedUntil = Date.now() + hoursLeft * 3600e3;
+  } else if (typeof what === 'number' && what > 0) {
+    state.pausedUntil = Date.now() + what * 60e3;
+  } else {
+    state.pausedUntil = 'forever';
+  }
+  saveState();
+  const text = state.pausedUntil === 'forever' ? 'Paused until you resume.' : `Paused until ${timeStr(state.pausedUntil)}.`;
+  log(text, 'status');
+  return text;
+}
+
+function resume() {
+  delete state.pausedUntil;
+  saveState();
+  log('Resumed.', 'status');
+  return 'Resumed.';
 }
 
 // Someone texted in her chat (you by hand, or her): the bot backs off for a fresh
@@ -104,89 +133,120 @@ function onChatActivity(fromMe) {
   if (fromMe && state.awakeOn !== dayKey()) {
     state.awakeOn = dayKey();
     saveState();
-    console.log(`You texted ${config.recipientName} — bot starts for today.`);
+    log(`You texted ${config.recipientName} — bot starts for today.`, 'status');
   }
   if (state.awakeOn === dayKey()) {
     nextSendAt = Math.max(nextSendAt || 0, Date.now() + nextGapMs());
-    console.log(`Chat activity — next bot message not before ${timeStr(nextSendAt)}`);
+    log(`Chat activity — next bot message not before ${timeStr(nextSendAt)}.`);
   }
 }
 
+function describe() {
+  if (isPaused()) {
+    return { mode: 'paused', text: state.pausedUntil === 'forever' ? 'Paused until you resume' : `Paused until ${timeStr(state.pausedUntil)}` };
+  }
+  if (!hasNumber()) return { mode: 'setup', text: 'Add her number in Settings' };
+  if (wa.state !== 'ready' && !DRY_RUN) return { mode: 'offline', text: 'WhatsApp is not linked yet' };
+  const hour = localHour();
+  if (waitForMe()) {
+    if (!awakeToday()) return { mode: 'waiting', text: `Waiting for your first message to ${config.recipientName} today` };
+    if (hour >= config.quietHours.start || hour < DAY_STARTS_AT) return { mode: 'bedtime', text: 'Bedtime — done for today' };
+  } else if (inQuietHours(hour)) {
+    return { mode: 'bedtime', text: 'Quiet hours' };
+  }
+  return { mode: 'running', text: nextSendAt ? `Next message around ${timeStr(nextSendAt)}` : 'Running' };
+}
+
+// ---- Commands (WhatsApp self-chat) ----------------------------------------------
 // "pause", "pause 2h", "pause 30m", "pause today", "resume", "status"
 function handleCommand(text) {
   const [cmd, arg = ''] = text.trim().toLowerCase().split(/\s+/);
   if (cmd === 'pause' || cmd === 'stop') {
     const m = arg.match(/^(\d+(?:\.\d+)?)\s*(h|m)/);
-    if (m) state.pausedUntil = Date.now() + Number(m[1]) * (m[2] === 'h' ? 3600e3 : 60e3);
-    else if (arg === 'today') {
-      const hoursLeft = 24 - ((localHour() - DAY_STARTS_AT + 24) % 24); // until 4am
-      state.pausedUntil = Date.now() + hoursLeft * 3600e3;
-    } else state.pausedUntil = 'forever';
-    saveState();
-    return state.pausedUntil === 'forever' ? 'Paused until you say "bot resume".' : `Paused until ${timeStr(state.pausedUntil)}.`;
+    if (m) return pause(Number(m[1]) * (m[2] === 'h' ? 60 : 1));
+    return pause(arg === 'today' ? 'today' : 'forever');
   }
-  if (cmd === 'resume' || cmd === 'start') {
-    delete state.pausedUntil;
-    saveState();
-    return 'Resumed.';
-  }
-  if (cmd === 'status') {
-    if (isPaused()) return state.pausedUntil === 'forever' ? 'Paused (until you resume).' : `Paused until ${timeStr(state.pausedUntil)}.`;
-    if (waitForMe && state.awakeOn !== dayKey()) return `Running — waiting for your first message to ${config.recipientName} today.`;
-    return nextSendAt ? `Running — next message around ${timeStr(nextSendAt)}.` : 'Running.';
-  }
+  if (cmd === 'resume' || cmd === 'start') return resume();
+  if (cmd === 'status') return describe().text + '.';
   return 'Commands: pause, pause 2h, pause 30m, pause today, resume, status';
 }
 
-function canSendNow(hour) {
-  if (isPaused()) return status('Paused.'), false;
-  if (DRY_RUN) return true;
-  if (waitForMe) {
-    if (state.awakeOn !== dayKey()) return status(`Waiting for your first message to ${config.recipientName} today…`), false;
-    // After you're up, only bedtime applies (quietHours.start until 4am).
-    if (hour >= config.quietHours.start || hour < DAY_STARTS_AT) return status('Bedtime — done for today.'), false;
-    return true;
+// ---- Sending --------------------------------------------------------------------
+const botSent = new Set();
+
+let lastLLMError = {};
+
+async function writeMessage(hour) {
+  const args = { hour, name: config.recipientName, neverSay: config.myStyle?.neverSay, myStyle: config.myStyle };
+  const fromLLM = config.llm?.enabled && (await generateWithLLM({ llm: config.llm, ...args }));
+  let error = null;
+  if (config.llm?.enabled && !fromLLM) {
+    error = friendlyLLMError(llmLastError());
+    if (error !== lastLLMError.text || Date.now() - lastLLMError.t > 60e3) {
+      log(`AI writer didn't work (${error}) — used a built-in message.`, 'error');
+      lastLLMError = { text: error, t: Date.now() };
+    }
   }
-  if (inQuietHours(hour)) return status('Quiet hours.'), false;
-  return true;
+  return { parts: fromLLM || buildMessage(args), source: fromLLM ? 'AI' : 'built-in', error };
 }
 
-async function loop(client, chatId) {
+function friendlyLLMError(e = '') {
+  if (/fetch failed|ECONNREFUSED/i.test(e)) return `can't reach ${config.llm.baseUrl} — is it running?`;
+  if (/HTTP 401/.test(e)) return 'the API key was rejected';
+  if (/HTTP 404|model.*(not found|does not exist)/i.test(e)) return `model "${config.llm.model}" not found`;
+  if (/HTTP 429/.test(e)) return 'rate limit reached, try later';
+  return e.replace(/^HTTP \d+ /, '').slice(0, 140) || 'unknown error';
+}
+
+async function sendParts(client, parts) {
+  for (const part of parts) {
+    if (DRY_RUN) {
+      log(`[preview] would send: ${part}`, 'sent');
+      continue;
+    }
+    const chatId = herChatId();
+    const chat = await client.getChatById(chatId);
+    await chat.sendStateTyping();
+    await sleep(typingMs(part));
+    await chat.clearState();
+    botSent.add(part);
+    await client.sendMessage(chatId, part);
+    log(`Sent: ${part}`, 'sent');
+    await sleep(rand(2000, 7000));
+  }
+}
+
+async function loop(client) {
   for (;;) {
     await sleep(DRY_RUN ? 300 : Number(process.env.SWEETBOT_POLL_MS) || 20000);
-    const hour = localHour();
-    if (!canSendNow(hour)) continue;
+    const d = describe();
+    if (d.mode !== 'running') {
+      status(d.text + '.');
+      continue;
+    }
 
     if (!nextSendAt) {
-      nextSendAt = Date.now() + (DRY_RUN ? 1000 : nextGapMs());
-      status(`Next message around ${timeStr(nextSendAt)}`);
+      nextSendAt = Date.now() + (DRY_RUN ? 1500 : nextGapMs());
+      status(`Next message around ${timeStr(nextSendAt)}.`);
     }
     if (Date.now() < nextSendAt) continue;
-    nextSendAt = Date.now() + (DRY_RUN ? 1000 : nextGapMs());
+    nextSendAt = Date.now() + (DRY_RUN ? 1500 : nextGapMs());
 
     if (Math.random() < config.skipChance) {
-      status(`Skipping this one (people get busy). Next around ${timeStr(nextSendAt)}`);
+      status(`Skipped one (people get busy). Next around ${timeStr(nextSendAt)}.`);
       continue;
     }
     try {
-      const args = { hour, name: config.recipientName, neverSay: config.myStyle?.neverSay, myStyle: config.myStyle };
-      const parts = (config.llm?.enabled && (await generateWithLLM({ llm: config.llm, ...args }))) || buildMessage(args);
-      await sendParts(client, chatId, parts);
-      status(`Next message around ${timeStr(nextSendAt)}`);
+      const { parts } = await writeMessage(localHour());
+      await sendParts(client, parts);
+      status(`Next message around ${timeStr(nextSendAt)}.`);
     } catch (err) {
-      console.error('Send failed:', err.message);
+      log(`Send failed: ${err.message}`, 'error');
     }
   }
 }
 
-// Typing commands into this window works too: pause / pause 2h / resume / status
-function listenToKeyboard() {
-  if (!process.stdin.isTTY) return;
-  const rl = require('readline').createInterface({ input: process.stdin });
-  rl.on('line', (line) => line.trim() && console.log(handleCommand(line.replace(/^bot\s+/i, ''))));
-  console.log('Type "pause", "pause 2h", "resume" or "status" here any time.');
-}
-
+// ---- Browser discovery ------------------------------------------------------------
 // Puppeteer's own Chrome download is sometimes blocked (e.g. npm's allow-scripts),
 // so fall back to a Chrome or Edge that's already installed.
 function findBrowser() {
@@ -212,60 +272,59 @@ function findBrowser() {
   return candidates.find((p) => fs.existsSync(p)); // undefined → let puppeteer decide
 }
 
-async function main() {
-  if (DRY_RUN) {
-    console.log('Dry run: printing messages instead of sending them (assumes you are awake).\n');
-    listenToKeyboard();
-    return loop(null, null);
-  }
+function openInBrowser(target) {
+  const opener = process.platform === 'win32' ? 'start ""' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  exec(`${opener} "${target}"`);
+}
 
+// ---- WhatsApp -----------------------------------------------------------------------
+// state: starting → qr → linked → ready (or disconnected / error)
+const wa = { state: DRY_RUN ? 'preview' : 'starting', qr: null, error: null };
+
+async function startWhatsApp() {
   const { Client, LocalAuth } = require('whatsapp-web.js');
-  const qrcode = require('qrcode-terminal');
   const QRCode = require('qrcode');
-  const { exec } = require('child_process');
 
   const browser = findBrowser();
-  console.log(`Starting browser${browser ? ` (${browser})` : ''}…`);
+  log(`Starting WhatsApp Web${browser ? ` with ${path.basename(browser)}` : ''} — this can take a minute…`);
 
   const client = new Client({
     authStrategy: new LocalAuth({ dataPath: path.join(__dirname, '.wwebjs_auth') }),
     puppeteer: { headless: true, executablePath: browser, args: ['--no-sandbox', '--disable-setuid-sandbox'] },
   });
 
-  // Text QR codes often render badly in PowerShell, so also save a PNG and open it.
-  const qrFile = path.join(__dirname, 'whatsapp-qr.png');
-  let qrOpened = false;
   client.on('qr', async (qr) => {
-    console.log('\nScan this QR in WhatsApp → Settings → Linked devices → Link a device:');
-    qrcode.generate(qr, { small: true });
-    try {
-      await QRCode.toFile(qrFile, qr, { width: 400, margin: 2 });
-      console.log(`Also saved as an image: ${qrFile}`);
-      if (!qrOpened) {
-        qrOpened = true;
-        const opener = process.platform === 'win32' ? 'start ""' : process.platform === 'darwin' ? 'open' : 'xdg-open';
-        exec(`${opener} "${qrFile}"`);
-      }
-    } catch (err) {
-      console.error('Could not save the QR image:', err.message);
-    }
-    console.log('(The code refreshes every ~20 seconds; the image file updates too — reopen it if it expired.)');
+    wa.state = 'qr';
+    wa.qr = await QRCode.toDataURL(qr, { width: 320, margin: 1 });
+    status('Scan the QR code in the control panel to link WhatsApp.');
   });
-  client.on('loading_screen', (percent) => console.log(`Loading WhatsApp… ${percent}%`));
+  client.on('loading_screen', (percent) => status(`Loading WhatsApp… ${percent}%`));
   client.on('authenticated', () => {
-    console.log('Linked! Finishing login…');
-    fs.rmSync(qrFile, { force: true });
+    wa.state = 'linked';
+    wa.qr = null;
+    log('WhatsApp linked — finishing login…', 'status');
   });
-  client.on('auth_failure', (m) => console.error('Auth failed:', m));
+  client.on('auth_failure', (m) => {
+    wa.state = 'error';
+    wa.error = `Login failed: ${m}`;
+    log(wa.error, 'error');
+  });
   client.on('disconnected', (r) => {
-    console.error('Disconnected:', r);
-    process.exit(1);
+    wa.state = 'disconnected';
+    wa.error = `WhatsApp disconnected (${r}). Restart the bot to link again.`;
+    log(wa.error, 'error');
   });
-  const chatId = `${config.recipientNumber}@c.us`;
-  const herIds = new Set([chatId]);
+
+  const herIds = new Set();
+  let herIdsFor = null;
 
   // WhatsApp sometimes uses other ids (e.g. @lid) for the same chat, so match by number too.
   async function isHerChat(msg) {
+    if (herIdsFor !== config.recipientNumber) {
+      herIds.clear();
+      herIds.add(herChatId());
+      herIdsFor = config.recipientNumber;
+    }
     const other = msg.fromMe ? msg.to : msg.from;
     if (herIds.has(other)) return true;
     if (other.endsWith('@g.us')) return false;
@@ -290,36 +349,84 @@ async function main() {
       const toSelf = msg.from === msg.to || msg.to === client.info?.wid?._serialized;
       if (msg.fromMe && toSelf && /^bot\b/i.test(body)) {
         const reply = handleCommand(body.replace(/^bot\s*/i, ''));
-        console.log(`[command] ${body} → ${reply}`);
+        log(`WhatsApp command "${body}" → ${reply}`);
         await msg.reply(`🤖 ${reply}`);
         return;
       }
 
-      if (!(await isHerChat(msg))) return;
+      if (!hasNumber() || !(await isHerChat(msg))) return;
       if (msg.fromMe && botSent.delete(body)) return; // the bot's own message
       onChatActivity(msg.fromMe);
     } catch (err) {
-      console.error('Could not read an incoming message:', err.message);
+      log(`Could not read an incoming message: ${err.message}`, 'error');
     }
   });
 
   client.on('ready', () => {
-    console.log('Logged in. Starting.');
-    console.log(`Text "bot pause", "bot pause 2h", "bot resume" or "bot status" to yourself on WhatsApp to control it.`);
-    listenToKeyboard();
-    loop(client, chatId);
+    wa.state = 'ready';
+    wa.error = null;
+    log('WhatsApp is ready.', 'status');
+    loop(client);
   });
 
-  console.log('Opening WhatsApp Web (can take up to a minute the first time)…');
   try {
     await client.initialize();
   } catch (err) {
-    console.error(`\nCould not start WhatsApp Web: ${err.message}`);
+    wa.state = 'error';
+    wa.error = `Could not start WhatsApp Web: ${err.message}`;
     if (/executable|browser|chrome|launch/i.test(err.message)) {
-      console.error('No usable browser found. Install Google Chrome, or set "browserPath" in config.json to chrome.exe / msedge.exe.');
+      wa.error += ' — no usable browser found. Install Google Chrome, or set "browserPath" in config.json.';
     }
-    process.exit(1);
+    log(wa.error, 'error');
   }
+}
+
+// ---- Start ----------------------------------------------------------------------------
+async function main() {
+  const port = Number(config.uiPort) || 3737;
+  try {
+    await startUI({
+      port,
+      config,
+      saveConfig,
+      getStatus: () => ({
+        whatsapp: wa.state,
+        qr: wa.qr,
+        error: wa.error,
+        bot: describe(),
+        events: events.slice(-60).reverse(),
+        preview: DRY_RUN,
+      }),
+      pause,
+      resume,
+      preview: async () => {
+        const hour = localHour();
+        const out = [];
+        for (let i = 0; i < 4; i++) out.push(await writeMessage(hour));
+        return out;
+      },
+      stop: () => {
+        log('Stopping — bye!');
+        setTimeout(() => process.exit(0), 300);
+      },
+    });
+  } catch (err) {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`Sweetbot already seems to be running — opening its control panel.`);
+      if (!NO_BROWSER) openInBrowser(`http://localhost:${port}`);
+      process.exit(0);
+    }
+    throw err;
+  }
+  const url = `http://localhost:${port}`;
+  log(`Control panel: ${url}`);
+  if (!NO_BROWSER) openInBrowser(url);
+
+  if (DRY_RUN) {
+    log('Preview mode: messages are shown here, nothing is sent.', 'status');
+    return loop(null);
+  }
+  startWhatsApp();
 }
 
 main();

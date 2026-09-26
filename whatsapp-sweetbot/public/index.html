@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sweetbot</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💌</text></svg>">
+<style>
+  :root {
+    --bg: #faf7f5; --card: #ffffff; --text: #2b2227; --muted: #7a6d73; --line: #eee4e7;
+    --accent: #d94f7a; --accent-soft: #fbe6ed; --ok: #2f9e6b; --ok-soft: #e1f4ea;
+    --warn: #b7791f; --warn-soft: #fbf0dc; --err: #c53b3b; --err-soft: #fbe3e3;
+    --idle: #6b7280; --idle-soft: #eef0f3; --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17131a; --card: #211b24; --text: #f3eaf0; --muted: #a998a3; --line: #342a37;
+      --accent: #f07aa0; --accent-soft: #3b2130; --ok: #5cc995; --ok-soft: #1b3328;
+      --warn: #e2b04f; --warn-soft: #3a2f18; --err: #f07a7a; --err-soft: #3d1f22;
+      --idle: #a1a7b3; --idle-soft: #2a2830;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 18px 24px; max-width: 1100px; margin: 0 auto; }
+  header h1 { font-size: 22px; margin: 0; white-space: nowrap; letter-spacing: -.01em; }
+  header .spacer { flex: 1; }
+  main { max-width: 1100px; margin: 0 auto; padding: 0 24px 40px; display: grid; gap: 18px; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 820px) { main { grid-template-columns: 1fr; padding: 0 16px 32px; } header { padding: 16px; } }
+  .col { display: grid; gap: 18px; align-content: start; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  .wide { grid-column: 1 / -1; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; font-weight: 600; font-size: 13px; }
+  .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .running { color: var(--ok); background: var(--ok-soft); }
+  .paused, .waiting { color: var(--warn); background: var(--warn-soft); }
+  .bedtime, .offline, .setup { color: var(--idle); background: var(--idle-soft); }
+  .error { color: var(--err); background: var(--err-soft); }
+  .big { font-size: 20px; font-weight: 600; margin: 4px 0 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  button { white-space: nowrap; font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text); padding: 9px 14px; border-radius: 10px; cursor: pointer; font-weight: 500; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { filter: brightness(1.05); }
+  button.danger { color: var(--err); }
+  button:disabled { opacity: .5; cursor: default; }
+  .qr { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+  .qr img { width: 220px; height: 220px; border-radius: 10px; background: #fff; padding: 8px; }
+  .qr ol { margin: 0; padding-left: 20px; }
+  .muted { color: var(--muted); }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; vertical-align: -2px; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  ul.log { list-style: none; margin: 0; padding: 0; max-height: 460px; overflow-y: auto; }
+  ul.log li { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+  ul.log li:last-child { border-bottom: 0; }
+  ul.log time { color: var(--muted); font-variant-numeric: tabular-nums; flex: 0 0 auto; white-space: nowrap; }
+  ul.log .sent { font-weight: 600; }
+  ul.log .err { color: var(--err); }
+  .samples { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+  .samples li { background: var(--accent-soft); padding: 8px 12px; border-radius: 12px 12px 12px 4px; display: flex; justify-content: space-between; gap: 10px; }
+  .samples small { color: var(--muted); white-space: nowrap; }
+  .bad-note { color: var(--err); margin: 0; font-size: 13px; }
+  form { display: grid; gap: 22px; }
+  fieldset { border: 0; padding: 0; margin: 0; display: grid; align-items: start; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  legend { font-weight: 600; margin-bottom: 10px; font-size: 16px; }
+  label { display: grid; gap: 5px; align-content: start; font-size: 13px; color: var(--muted); }
+  label.check { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; }
+  input, select, textarea { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; width: 100%; }
+  input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); }
+  textarea { min-height: 110px; resize: vertical; }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  .hint { font-size: 12px; color: var(--muted); }
+  .formbar { display: flex; gap: 10px; align-items: center; }
+  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 32px); }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>💌 Sweetbot</h1>
+  <span id="pill" class="pill offline">Starting…</span>
+  <span class="spacer"></span>
+  <button id="stopBtn" class="danger" title="Turn the bot off completely">Stop bot</button>
+</header>
+
+<main>
+  <div class="col">
+    <section class="card" id="waCard">
+      <h2>WhatsApp</h2>
+      <div id="waBody"><span class="spinner"></span>Connecting…</div>
+    </section>
+
+    <section class="card">
+      <h2>Today</h2>
+      <div class="big" id="botText">…</div>
+      <div class="row" id="pauseRow">
+        <button data-pause="30">Pause 30 min</button>
+        <button data-pause="120">Pause 2 hours</button>
+        <button data-pause="today">Pause rest of today</button>
+        <button data-pause="forever">Pause until I resume</button>
+      </div>
+      <div class="row" id="resumeRow" hidden>
+        <button class="primary" id="resumeBtn">▶ Resume</button>
+      </div>
+      <p class="hint">From your phone: send <b>bot pause</b>, <b>bot pause 2h</b>, <b>bot resume</b> or <b>bot status</b> to yourself in WhatsApp's "Message yourself" chat.</p>
+    </section>
+
+    <section class="card">
+      <h2>Try it</h2>
+      <p class="muted" style="margin-top:0">See what the bot would send right now. Nothing is sent.</p>
+      <button id="previewBtn">Show sample messages</button>
+      <ul class="samples" id="samples"></ul>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Activity</h2>
+    <ul class="log" id="log"><li class="muted">Nothing yet.</li></ul>
+  </section>
+
+  <section class="card wide">
+    <h2>Settings</h2>
+    <form id="settings">
+      <fieldset>
+        <legend>Her</legend>
+        <label>What you call her <input name="recipientName" required maxlength="40"></label>
+        <label>Her WhatsApp number <input name="recipientNumber" inputmode="numeric" placeholder="91 98123 45678"><span class="hint">Country code first, e.g. 91 for India.</span></label>
+        <label>Your timezone <input name="timezone" placeholder="Asia/Kolkata"></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Timing</legend>
+        <label>Shortest gap (minutes) <input name="minGapMinutes" type="number" min="10" max="600"></label>
+        <label>Longest gap (minutes) <input name="maxGapMinutes" type="number" min="10" max="720"></label>
+        <label>Bedtime (stop sending at)
+          <select name="bedtime">
+            <option value="18">6 pm</option><option value="19">7 pm</option><option value="20">8 pm</option>
+            <option value="21">9 pm</option><option value="22">10 pm</option><option value="23">11 pm</option>
+          </select>
+        </label>
+        <label class="check" style="grid-column:1/-1"><input type="checkbox" name="startAfterMyFirstMessage"> Wait each day until I've texted her myself</label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Your style</legend>
+        <label>Never say (one per line) <textarea name="neverSay" placeholder="gm&#10;hey"></textarea><span class="hint">Blocks stretched spellings too: "hey" also blocks "heyyy".</span></label>
+        <label>How you text (one note per line) <textarea name="notes" placeholder="I always call her Shona"></textarea><span class="hint">Used when AI writes the messages.</span></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>AI writer</legend>
+        <label class="check" style="grid-column:1/-1"><input type="checkbox" name="llmEnabled"> Let an AI write the messages (otherwise it uses built-in ones)</label>
+        <div id="aiFields" style="display:contents">
+          <label>Service
+            <select name="provider">
+              <option value="https://api.groq.com/openai/v1">Groq (free, online)</option>
+              <option value="http://localhost:11434/v1">Ollama (on this PC)</option>
+              <option value="http://localhost:1234/v1">LM Studio (on this PC)</option>
+              <option value="custom">Other…</option>
+            </select>
+          </label>
+          <label id="baseUrlLabel" hidden>Server address <input name="baseUrl" placeholder="https://…/v1"></label>
+          <label>Model <input name="model" placeholder="openai/gpt-oss-120b"></label>
+          <label>API key <input name="apiKey" type="password" autocomplete="off"><span class="hint" id="keyHint"></span></label>
+        </div>
+      </fieldset>
+
+      <div class="formbar">
+        <button class="primary" type="submit">Save settings</button>
+        <span class="hint">Changes apply straight away.</span>
+      </div>
+    </form>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const form = $('#settings');
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Sweetbot': '1' }, body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+  return data;
+}
+
+let toastTimer;
+function toast(text) {
+  const t = $('#toast');
+  t.textContent = text;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function el(tag, props = {}, ...kids) {
+  const n = Object.assign(document.createElement(tag), props);
+  n.append(...kids);
+  return n;
+}
+
+// ---- WhatsApp card ----
+function renderWhatsApp(s) {
+  const body = $('#waBody');
+  body.replaceChildren();
+  if (s.whatsapp === 'qr' && s.qr) {
+    const steps = el('ol', {}, el('li', { textContent: 'Open WhatsApp on your phone' }),
+      el('li', { textContent: 'Settings → Linked devices → Link a device' }),
+      el('li', { textContent: 'Point your phone at this code' }));
+    body.append(el('div', { className: 'qr' }, el('img', { src: s.qr, alt: 'WhatsApp QR code' }), steps));
+  } else if (s.whatsapp === 'ready') {
+    body.append(el('span', { className: 'pill running', textContent: 'Connected' }));
+  } else if (s.whatsapp === 'preview') {
+    body.append(el('span', { className: 'pill waiting', textContent: 'Preview mode — nothing is sent' }));
+  } else if (s.whatsapp === 'error' || s.whatsapp === 'disconnected') {
+    body.append(el('span', { className: 'pill error', textContent: 'Problem' }), el('p', { textContent: s.error || '' }));
+  } else {
+    body.append(el('span', { className: 'spinner' }), s.whatsapp === 'linked' ? 'Linked — finishing login…' : 'Opening WhatsApp Web… this can take a minute');
+  }
+}
+
+// ---- Status ----
+async function refresh() {
+  let s;
+  try { s = await api('/api/status'); } catch {
+    $('#pill').className = 'pill error'; $('#pill').textContent = 'Bot is not running';
+    $('#botText').textContent = 'The bot is off. Double-click "Start Sweetbot" to turn it on.';
+    return;
+  }
+  renderWhatsApp(s);
+  const mode = s.bot.mode;
+  $('#pill').className = `pill ${mode}`;
+  $('#pill').textContent = { running: 'Running', paused: 'Paused', waiting: 'Waiting for you', bedtime: 'Bedtime', offline: 'Not linked', setup: 'Needs setup' }[mode] || mode;
+  $('#botText').textContent = s.bot.text;
+  $('#pauseRow').hidden = mode === 'paused';
+  $('#resumeRow').hidden = mode !== 'paused';
+
+  const log = $('#log');
+  log.replaceChildren();
+  if (!s.events.length) log.append(el('li', { className: 'muted', textContent: 'Nothing yet.' }));
+  for (const e of s.events) {
+    const time = new Date(e.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    log.append(el('li', {}, el('time', { textContent: time }),
+      el('span', { className: e.kind === 'sent' ? 'sent' : e.kind === 'error' ? 'err' : '', textContent: (e.kind === 'sent' ? '💬 ' : '') + e.text })));
+  }
+}
+
+document.querySelectorAll('[data-pause]').forEach((b) => b.addEventListener('click', async () => {
+  const v = b.dataset.pause;
+  try { toast((await api('/api/pause', { minutes: v === 'today' || v === 'forever' ? v : Number(v) })).message); refresh(); }
+  catch (e) { toast(e.message); }
+}));
+$('#resumeBtn').addEventListener('click', async () => { try { toast((await api('/api/resume', {})).message); refresh(); } catch (e) { toast(e.message); } });
+
+$('#stopBtn').addEventListener('click', async () => {
+  if (!confirm('Stop the bot completely? It won\'t send anything until you start it again.')) return;
+  try { await api('/api/stop', {}); } catch {}
+  setTimeout(refresh, 800);
+});
+
+$('#previewBtn').addEventListener('click', async () => {
+  const btn = $('#previewBtn'), list = $('#samples');
+  btn.disabled = true; btn.textContent = 'Writing…';
+  try {
+    const { samples } = await api('/api/preview', {});
+    const failed = samples.find((s) => s.error);
+    list.replaceChildren(
+      ...(failed ? [el('p', { className: 'bad-note', textContent: `⚠ AI writer didn't work (${failed.error}) — showing built-in messages instead.` })] : []),
+      ...samples.map((s) => el('li', {}, el('span', { textContent: s.parts.join('  ·  ') }), el('small', { textContent: s.source }))),
+    );
+  } catch (e) { toast(e.message); }
+  btn.disabled = false; btn.textContent = 'Show more samples';
+});
+
+// ---- Settings ----
+function syncAiFields() {
+  $('#aiFields').style.display = form.llmEnabled.checked ? 'contents' : 'none';
+  $('#baseUrlLabel').hidden = form.provider.value !== 'custom';
+}
+form.llmEnabled.addEventListener('change', syncAiFields);
+form.provider.addEventListener('change', () => {
+  const defaults = { 'https://api.groq.com/openai/v1': 'openai/gpt-oss-120b', 'http://localhost:11434/v1': 'llama3.1', 'http://localhost:1234/v1': '' };
+  if (form.provider.value in defaults) form.model.value = defaults[form.provider.value];
+  syncAiFields();
+});
+
+function fillSettings(s) {
+  form.recipientName.value = s.recipientName;
+  form.recipientNumber.value = s.recipientNumber;
+  form.timezone.value = s.timezone;
+  form.minGapMinutes.value = s.minGapMinutes;
+  form.maxGapMinutes.value = s.maxGapMinutes;
+  form.bedtime.value = String(s.bedtime);
+  form.startAfterMyFirstMessage.checked = s.startAfterMyFirstMessage;
+  form.neverSay.value = s.neverSay.join('\n');
+  form.notes.value = s.notes.join('\n');
+  form.llmEnabled.checked = s.llm.enabled;
+  const known = [...form.provider.options].some((o) => o.value === s.llm.baseUrl);
+  form.provider.value = known ? s.llm.baseUrl : 'custom';
+  form.baseUrl.value = s.llm.baseUrl;
+  form.model.value = s.llm.model;
+  form.apiKey.value = '';
+  form.apiKey.placeholder = s.llm.hasApiKey ? 'Saved — leave blank to keep it' : 'Paste your key (Groq keys start with gsk_)';
+  $('#keyHint').textContent = s.llm.hasApiKey ? 'A key is saved on this PC.' : 'Not needed for Ollama or LM Studio.';
+  syncAiFields();
+}
+
+form.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const body = {
+    recipientName: form.recipientName.value,
+    recipientNumber: form.recipientNumber.value,
+    timezone: form.timezone.value,
+    minGapMinutes: Number(form.minGapMinutes.value),
+    maxGapMinutes: Number(form.maxGapMinutes.value),
+    bedtime: Number(form.bedtime.value),
+    startAfterMyFirstMessage: form.startAfterMyFirstMessage.checked,
+    neverSay: form.neverSay.value,
+    notes: form.notes.value,
+    llm: {
+      enabled: form.llmEnabled.checked,
+      baseUrl: form.provider.value === 'custom' ? form.baseUrl.value : form.provider.value,
+      model: form.model.value,
+      apiKey: form.apiKey.value,
+    },
+  };
+  try {
+    const { settings } = await api('/api/settings', body);
+    fillSettings(settings);
+    toast('Saved ✓');
+    refresh();
+  } catch (e) { toast(e.message); }
+});
+
+api('/api/settings').then(fillSettings).catch(() => {});
+refresh();
+setInterval(refresh, 2500);
+</script>
+</body>
+</html>

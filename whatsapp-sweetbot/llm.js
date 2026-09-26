@@ -21,6 +21,7 @@ function examples() {
 }
 
 const recent = [];
+let lastError = null;
 
 function clean(text) {
   // Reasoning models: drop finished <think> blocks; an unfinished one means it ran out of tokens.
@@ -38,6 +39,7 @@ function clean(text) {
 }
 
 async function generateWithLLM({ llm, hour, name, myStyle = {} }) {
+  lastError = null;
   const neverSay = myStyle.neverSay || [];
   for (let attempt = 1; attempt <= 3; attempt++) {
     const parts = await generateOnce({ llm, hour, name, myStyle });
@@ -46,6 +48,7 @@ async function generateWithLLM({ llm, hour, name, myStyle = {} }) {
     console.error(`  LLM used a phrase you never say ("${parts[0]}") — retrying.`);
     recent.pop();
   }
+  lastError = 'it kept using words from your "never say" list';
   return null;
 }
 
@@ -86,9 +89,10 @@ async function generateOnce({ llm, hour, name, myStyle }) {
     if (recent.length > 8) recent.shift();
     return [text];
   } catch (err) {
-    console.error(`  LLM failed (${err.message}) — using built-in messages instead.`);
+    lastError = err.name === 'TimeoutError' ? 'it took too long to answer' : err.message;
+    console.error(`  LLM failed (${lastError}) — using built-in messages instead.`);
     return null;
   }
 }
 
-module.exports = { generateWithLLM };
+module.exports = { generateWithLLM, llmLastError: () => lastError };

@@ -10,20 +10,20 @@ randomised, human-looking intervals.
 - **Time of day:** morning, day, evening and night each have their own messages.
 - **Typing like a person:** it shows "typing…" for as long as the text would take to type, mostly writes in lowercase, sometimes stretches words ("youuu"), picks emoji at random, and now and then sends a quick follow-up text.
 
-## Setup
-```bash
-cd whatsapp-sweetbot
-npm install
-npm run setup                         # asks for her number, name, timezone, and LLM (optional)
-npm run preview                       # dry run: prints messages, sends nothing (Ctrl+C to stop)
-npm start                             # shows a QR code the first time
-```
-Scan the QR in WhatsApp → **Settings → Linked devices → Link a device**. You never
-give it your password. The session is saved in `.wwebjs_auth/`, so you only scan once. To log out,
-remove the linked device in your phone's WhatsApp or delete that folder.
+## Setup (Windows, no typing needed)
+1. Install [Node.js](https://nodejs.org) (LTS).
+2. Double-click **`Start Sweetbot.bat`**. The first run installs everything, which takes a couple of
+   minutes. Then the **control panel** opens in your browser at http://localhost:3737.
+3. Scan the QR code shown in the panel with WhatsApp → **Settings → Linked devices → Link a device**.
+4. Fill in **Settings** (her number, what you call her) and click **Save**.
 
-The bot has to keep running for messages to go out. Use a machine that is always on, such as a small
-VPS or a Raspberry Pi, with something like `pm2 start index.js`.
+The panel shows what the bot is doing and when the next message is due. It has buttons to pause and resume,
+**Show sample messages** to preview without sending, all the settings, and **Stop bot**.
+
+Keep the black `Start Sweetbot` window open (minimise it). Closing it stops the bot. To get a newer version,
+double-click **`Update Sweetbot.bat`**, then stop the bot and start it again.
+
+(Mac/Linux: `npm install && npm start`.)
 
 ## Your own habits
 In `config.json`:
