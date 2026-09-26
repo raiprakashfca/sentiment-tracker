@@ -38,3 +38,16 @@ Not included (authored locally on the original machine, no public source): `ai-e
 | `mmdc` | `npm i -g @mermaid-js/mermaid-cli` | mermaid-tools |
 | `omniroute` | `npm i -g omniroute` | omniroute-cli-serve |
 | `agent-reach` | see upstream README | agent-reach-internet-router |
+
+## Plugins (project scope, `.claude/settings.json`)
+
+Registered under `extraKnownMarketplaces` / `enabledPlugins`. Each collaborator installs them once:
+
+```bash
+claude plugin install ponytail@ponytail --scope project    # DietrichGebert/ponytail: lazy-senior-dev mode, 6 skills + hooks
+claude plugin install ecc@ecc --scope project              # affaan-m/ECC: 68 agents, 386 skills, hooks, chrome-devtools MCP (~41k always-on tokens)
+claude plugin install atlassian@atlassian --scope project  # atlassian/atlassian-mcp-server: Jira/Confluence MCP + 6 skills; run /mcp to sign in
+```
+
+`.mcp.json` also declares the Atlassian MCP server directly so Jira works in cloud sessions, where project plugins do not load.
+ECC rule packs (`common`, `python`) live in `.claude/rules/ecc/` because plugins cannot distribute rules.
