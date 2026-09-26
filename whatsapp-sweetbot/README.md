@@ -25,6 +25,24 @@ remove the linked device in your phone's WhatsApp or delete that folder.
 The bot has to keep running for messages to go out. Use a machine that is always on, such as a small
 VPS or a Raspberry Pi, with something like `pm2 start index.js`.
 
+## Teach it your texting style
+1. In WhatsApp, open her chat → ⋮ → More → **Export chat** → **Without media**, and copy the `.txt` file into this folder.
+2. Run:
+   ```bash
+   node learn-style.js "WhatsApp Chat with Her.txt" "Your Name"
+   ```
+   (If you get your name wrong, it lists the sender names it found.)
+3. Open `style.json` and **delete any phrase you wouldn't want sent out of the blue**.
+4. Try it with `npm run preview`, then restart the bot.
+
+It only keeps **your** short messages that are affectionate or greetings. It skips media, links, phone
+numbers, multi-line messages, and everyday messages like "pick up milk". It also copies which emoji you
+use and how often, and how often you write in lowercase. A phrase about morning or night is only sent at
+that time of day. It never sends the same message twice in a row. The more phrases it learns, the more
+it uses them. With fewer than about 25 it mixes in its built-in ones so it doesn't repeat itself.
+
+`style.json` and the chat export are listed in `.gitignore`, so they stay on your machine.
+
 ## Caveats
 - This uses [whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js), an
   **unofficial** WhatsApp Web client. Automating a personal account breaks WhatsApp's
