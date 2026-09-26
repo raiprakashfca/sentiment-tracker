@@ -5,7 +5,18 @@ const readline = require('readline');
 
 const file = path.join(__dirname, 'config.json');
 const defaults = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.example.json'), 'utf8'));
-const current = fs.existsSync(file) ? { ...defaults, ...JSON.parse(fs.readFileSync(file, 'utf8')) } : defaults;
+
+function readExisting() {
+  if (!fs.existsSync(file)) return defaults;
+  const text = fs.readFileSync(file, 'utf8');
+  try {
+    return { ...defaults, ...JSON.parse(text) };
+  } catch {
+    console.log('config.json was not in the right format, so starting it fresh.\n');
+    return defaults;
+  }
+}
+const current = readExisting();
 current.timezone = current.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 const PRESETS = {

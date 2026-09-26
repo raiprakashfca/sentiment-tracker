@@ -87,6 +87,31 @@ async function loop(client) {
   }
 }
 
+// Puppeteer's own Chrome download is sometimes blocked (e.g. npm's allow-scripts),
+// so fall back to a Chrome or Edge that's already installed.
+function findBrowser() {
+  if (config.browserPath) return config.browserPath;
+  try {
+    const bundled = require('puppeteer').executablePath();
+    if (fs.existsSync(bundled)) return bundled;
+  } catch {}
+  const pf = process.env.PROGRAMFILES || 'C:\\Program Files';
+  const pf86 = process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
+  const local = process.env.LOCALAPPDATA || '';
+  const candidates = [
+    path.join(pf, 'Google/Chrome/Application/chrome.exe'),
+    path.join(pf86, 'Google/Chrome/Application/chrome.exe'),
+    path.join(local, 'Google/Chrome/Application/chrome.exe'),
+    path.join(pf86, 'Microsoft/Edge/Application/msedge.exe'),
+    path.join(pf, 'Microsoft/Edge/Application/msedge.exe'),
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+  ];
+  return candidates.find((p) => fs.existsSync(p)); // undefined → let puppeteer decide
+}
+
 async function main() {
   if (DRY_RUN) {
     console.log('Dry run: printing messages instead of sending them.\n');
@@ -98,7 +123,7 @@ async function main() {
 
   const client = new Client({
     authStrategy: new LocalAuth({ dataPath: path.join(__dirname, '.wwebjs_auth') }),
-    puppeteer: { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] },
+    puppeteer: { headless: true, executablePath: findBrowser(), args: ['--no-sandbox', '--disable-setuid-sandbox'] },
   });
 
   client.on('qr', (qr) => {
