@@ -1,0 +1,3 @@
+# graphify: index the project code, not the vendored Claude skills
+.claude/
+graphify-out/
