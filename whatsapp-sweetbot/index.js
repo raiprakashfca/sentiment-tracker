@@ -4,6 +4,9 @@ const { exec } = require('child_process');
 const { buildMessage } = require('./messages');
 const { generateWithLLM, llmLastError } = require('./llm');
 const { startUI } = require('./ui');
+const { loadAuth } = require('./auth');
+const { killLeftoverBrowsers } = require('./browser-cleanup');
+const { newSessionId, removeOldSessions } = require('./session-folders');
 const autostart = require('./autostart');
 
 const DRY_RUN = process.argv.includes('--dry-run');
@@ -291,9 +294,30 @@ function openInBrowser(target) {
 // ---- WhatsApp -----------------------------------------------------------------------
 // state: starting → qr → linked → ready (or disconnected / error)
 const wa = { state: DRY_RUN ? 'preview' : 'starting', qr: null, error: null };
+const sessionRoot = path.join(__dirname, '.wwebjs_auth');
+const SHUTDOWN_TIMEOUT_MS = 10_000;
+let currentClient = null; // being started or running; activeClient is set only once it is ready
 let activeClient = null;
+let waGeneration = 0; // goes up on every start, so late events from an older client are ignored
 let loopStarted = false;
 let restartTimer = null;
+let relinking = false;
+let stopping = false; // set once Stop is pressed, so nothing starts a new Chrome on the way out
+
+// Closes a client's Chrome for certain: politely first, then by ending the process.
+// A Chrome left behind keeps the session folder locked, and every later start fails.
+async function shutDownClient(client) {
+  if (!client) return;
+  const chrome = client.pupBrowser?.process?.();
+  try {
+    await Promise.race([client.destroy(), sleep(SHUTDOWN_TIMEOUT_MS)]);
+  } catch {}
+  try {
+    if (chrome && chrome.exitCode === null) chrome.kill();
+  } catch {}
+  if (activeClient === client) activeClient = null;
+  if (currentClient === client) currentClient = null;
+}
 
 // Reconnect on its own: at PC start-up the internet may not be ready yet, and
 // WhatsApp occasionally drops linked devices. If you unlinked it, a new QR appears.
@@ -302,40 +326,87 @@ function restartWhatsApp(client, delayMs) {
   log(`Reconnecting to WhatsApp in ${Math.round(delayMs / 1000)} seconds…`);
   restartTimer = setTimeout(async () => {
     restartTimer = null;
-    try { await client.destroy(); } catch {}
-    startWhatsApp();
+    const generation = waGeneration;
+    await shutDownClient(client);
+    if (generation === waGeneration) startWhatsApp(); // a relink in the meantime starts it instead
   }, delayMs);
 }
 
+async function forgetLink(client, wasLinked) {
+  // Logging out tells WhatsApp to drop this PC from "Linked devices" on the phone.
+  if (client && wasLinked) {
+    try {
+      await Promise.race([client.logout(), sleep(SHUTDOWN_TIMEOUT_MS)]);
+    } catch {}
+  }
+  await shutDownClient(client);
+  // A new folder rather than emptying the old one: Windows can keep that locked for a while.
+  state.sessionId = newSessionId();
+  saveState();
+}
+
+// Forgets the current WhatsApp link and starts over, so the panel shows a new QR code.
+function relinkWhatsApp() {
+  if (DRY_RUN) return 'Preview mode — there is nothing to relink.';
+  if (stopping) return 'The bot is stopping.';
+  if (relinking) return 'Already relinking — the QR code will appear in a minute.';
+  relinking = true;
+  const client = currentClient;
+  const wasLinked = wa.state === 'ready';
+  waGeneration += 1;
+  clearTimeout(restartTimer);
+  restartTimer = null;
+  Object.assign(wa, { state: 'starting', qr: null, error: null });
+  log('Relinking WhatsApp — a new QR code will appear in a minute…', 'status');
+  forgetLink(client, wasLinked)
+    .catch((err) => log(`Could not clear the old WhatsApp link: ${err.message}`, 'error'))
+    .finally(() => {
+      relinking = false;
+      startWhatsApp();
+    });
+  return 'Relinking — a new QR code will appear in a minute.';
+}
+
 async function startWhatsApp() {
+  if (stopping) return;
+  const generation = ++waGeneration;
+  const isCurrent = () => generation === waGeneration;
   const { Client, LocalAuth } = require('whatsapp-web.js');
   const QRCode = require('qrcode');
+
+  if (await killLeftoverBrowsers(sessionRoot)) log('Closed a leftover browser from an earlier run.');
+  await removeOldSessions(sessionRoot, state.sessionId);
+  if (!isCurrent() || stopping) return;
 
   const browser = findBrowser();
   log(`Starting WhatsApp Web${browser ? ` with ${path.basename(browser)}` : ''} — this can take a minute…`);
 
   const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: path.join(__dirname, '.wwebjs_auth') }),
+    authStrategy: new LocalAuth({ clientId: state.sessionId || undefined, dataPath: sessionRoot }),
     puppeteer: { headless: true, executablePath: browser, args: ['--no-sandbox', '--disable-setuid-sandbox'] },
   });
+  currentClient = client;
+  const on = (event, handler) => client.on(event, (...args) => (isCurrent() ? handler(...args) : undefined));
 
-  client.on('qr', async (qr) => {
+  on('qr', async (qr) => {
+    const image = await QRCode.toDataURL(qr, { width: 320, margin: 1 });
+    if (!isCurrent()) return;
     wa.state = 'qr';
-    wa.qr = await QRCode.toDataURL(qr, { width: 320, margin: 1 });
+    wa.qr = image;
     status('Scan the QR code in the control panel to link WhatsApp.');
   });
-  client.on('loading_screen', (percent) => status(`Loading WhatsApp… ${percent}%`));
-  client.on('authenticated', () => {
+  on('loading_screen', (percent) => status(`Loading WhatsApp… ${percent}%`));
+  on('authenticated', () => {
     wa.state = 'linked';
     wa.qr = null;
     log('WhatsApp linked — finishing login…', 'status');
   });
-  client.on('auth_failure', (m) => {
+  on('auth_failure', (m) => {
     wa.state = 'error';
     wa.error = `Login failed: ${m}`;
     log(wa.error, 'error');
   });
-  client.on('disconnected', (r) => {
+  on('disconnected', (r) => {
     wa.state = 'disconnected';
     wa.error = r === 'LOGOUT' ? 'WhatsApp was unlinked from your phone — a new QR code will appear here.' : `WhatsApp disconnected (${r}).`;
     log(wa.error, 'error');
@@ -367,7 +438,7 @@ async function startWhatsApp() {
     return false;
   }
 
-  client.on('message_create', async (msg) => {
+  on('message_create', async (msg) => {
     try {
       if (msg.type !== 'chat' && !msg.hasMedia) return;
       const body = msg.body || '';
@@ -389,7 +460,7 @@ async function startWhatsApp() {
     }
   });
 
-  client.on('ready', () => {
+  on('ready', () => {
     activeClient = client;
     wa.state = 'ready';
     wa.error = null;
@@ -403,9 +474,12 @@ async function startWhatsApp() {
   try {
     await client.initialize();
   } catch (err) {
+    if (!isCurrent()) return;
+    const reason = err?.message || String(err);
     wa.state = 'error';
-    wa.error = `Could not start WhatsApp Web: ${err.message}`;
-    if (/executable|browser|chrome|launch/i.test(err.message) && !/net::|timeout/i.test(err.message)) {
+    wa.error = `Could not start WhatsApp Web: ${reason}`;
+    // "already running" means a leftover browser holds the session folder: worth another try.
+    if (/executable|browser|chrome|launch/i.test(reason) && !/net::|timeout|already running/i.test(reason)) {
       wa.error += ' — no usable browser found. Install Google Chrome, or set "browserPath" in config.json.';
       return log(wa.error, 'error');
     }
@@ -422,6 +496,7 @@ async function main() {
       port,
       config,
       saveConfig,
+      log,
       getStatus: () => ({
         whatsapp: wa.state,
         qr: wa.qr,
@@ -447,9 +522,13 @@ async function main() {
         for (let i = 0; i < 4; i++) out.push(await writeMessage(hour));
         return out;
       },
+      relink: relinkWhatsApp,
       stop: () => {
         log('Stopping — bye!');
-        setTimeout(() => process.exit(0), 300);
+        stopping = true;
+        waGeneration += 1;
+        clearTimeout(restartTimer);
+        shutDownClient(currentClient).finally(() => setTimeout(() => process.exit(0), 300));
       },
     });
   } catch (err) {
@@ -462,6 +541,7 @@ async function main() {
   }
   const url = `http://localhost:${port}`;
   log(`Control panel: ${url}`);
+  if (!loadAuth()) log('The control panel is locked until you set a password: double-click "Set Password" in the Sweetbot folder.', 'error');
   if (!NO_BROWSER) openInBrowser(url);
 
   if (DRY_RUN) {

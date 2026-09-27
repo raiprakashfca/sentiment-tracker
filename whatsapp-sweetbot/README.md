@@ -67,6 +67,25 @@ the bot's window:
 The bot replies in that chat with 🤖. The pause survives restarts. Commands typed in any other
 chat are ignored.
 
+## Link WhatsApp again
+If WhatsApp stops connecting, or you want to link a different phone, open the control panel and
+click **Link WhatsApp again**. The bot forgets the old link, and a new QR code appears in the
+WhatsApp box within a minute. Scan it from your phone: **Settings → Linked devices → Link a device**.
+
+If the bot was stopped roughly (a crash, or ending it from Task Manager), a hidden browser can be
+left running. The bot now closes that by itself the next time it starts.
+
+## The control panel is locked
+The control panel asks for a password before it shows or changes anything. Until a password is
+set, nobody can get in.
+
+- **Set or change the password:** double-click **Set Password** and type it twice (the typing
+  stays hidden). Changing it signs out anyone who was logged in.
+- **Log out:** use the button at the top of the control panel. Restarting the bot also logs you out.
+- Five wrong passwords in a row lock the login for 15 minutes, and show up under Activity.
+- Only a scrambled fingerprint of the password is saved (in `.auth.json`), never the password.
+  If you forget it, delete `.auth.json` and set a new one.
+
 ## Teach it your texting style
 1. In WhatsApp, open her chat → ⋮ → More → **Export chat** → **Without media**, and copy the `.txt` file into this folder.
 2. Run:

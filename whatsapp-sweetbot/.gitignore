@@ -5,6 +5,7 @@ config.json
 style.json
 *.txt
 .state.json
+.auth.json
 whatsapp-qr.png
 package-lock.json
 sweetbot.log

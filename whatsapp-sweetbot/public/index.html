@@ -82,6 +82,7 @@
   <h1>💌 Sweetbot</h1>
   <span id="pill" class="pill offline">Starting…</span>
   <span class="spacer"></span>
+  <button id="logoutBtn" title="Lock the control panel. The bot keeps running.">Log out</button>
   <button id="stopBtn" class="danger" title="Turn the bot off completely">Stop bot</button>
 </header>
 
@@ -90,6 +91,9 @@
     <section class="card" id="waCard">
       <h2>WhatsApp</h2>
       <div id="waBody"><span class="spinner"></span>Connecting…</div>
+      <div class="row" style="margin-top:16px">
+        <button id="relinkBtn" title="Forget the current link and show a new QR code to scan">Link WhatsApp again</button>
+      </div>
     </section>
 
     <section class="card">
@@ -191,6 +195,10 @@ async function api(path, body) {
   const res = await fetch(path, body === undefined ? {} : {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Sweetbot': '1' }, body: JSON.stringify(body),
   });
+  if (res.status === 401) {
+    location.replace('/login');
+    return new Promise(() => {}); // the page is leaving, so callers never see an error
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
   return data;
@@ -263,6 +271,15 @@ document.querySelectorAll('[data-pause]').forEach((b) => b.addEventListener('cli
   catch (e) { toast(e.message); }
 }));
 $('#resumeBtn').addEventListener('click', async () => { try { toast((await api('/api/resume', {})).message); refresh(); } catch (e) { toast(e.message); } });
+
+$('#relinkBtn').addEventListener('click', async () => {
+  if (!confirm('Link WhatsApp again? The current link is forgotten and a new QR code appears here for you to scan with your phone.')) return;
+  try { toast((await api('/api/relink', {})).message); refresh(); } catch (e) { toast(e.message); }
+});
+
+$('#logoutBtn').addEventListener('click', async () => {
+  try { await api('/api/logout', {}); location.replace('/login'); } catch (e) { toast(e.message); }
+});
 
 $('#stopBtn').addEventListener('click', async () => {
   if (!confirm('Stop the bot completely? It won\'t send anything until you start it again.')) return;
