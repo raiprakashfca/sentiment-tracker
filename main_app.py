@@ -7,6 +7,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from streamlit_autorefresh import st_autorefresh
 import fetch_option_data  # ensure this module is importable
+import news_sentiment
 
 # ---------- PAGE CONFIGURATION ----------
 st.set_page_config(page_title="📈 Greeks Sentiment Tracker", layout="wide")
@@ -115,6 +116,71 @@ st.subheader("Sentiment Summary")
 st.table(summary_df.style.format({
     'DELTA':'{:.4f}','VEGA':'{:.2f}','THETA':'{:.2f}',**({'OI':'{:.0f}'} if 'OI' in summary_df.columns else {})
 }))
+# ---------- NEWS HEADLINE SENTIMENT (TypeSafe) ----------
+NEWS_CACHE_TTL_SECONDS = 15 * 60  # one TypeSafe call per 15 min, not per 60 s auto-refresh
+
+
+@st.cache_data(ttl=NEWS_CACHE_TTL_SECONDS, show_spinner=False)
+def load_news_signal(_api_key: str, model: str | None):  # leading underscore keeps the key out of the cache hash
+    headlines = news_sentiment.fetch_headlines()
+    batch = news_sentiment.judge_headlines(headlines, api_key=_api_key, model=model)
+    signal = news_sentiment.aggregate(batch.judgments)
+    rows = [
+        {
+            "Headline": j.headline.title,
+            "Source": j.headline.source,
+            "Published (IST)": (
+                j.headline.published.astimezone(pytz.timezone("Asia/Kolkata")).strftime("%d-%b %H:%M")
+                if j.headline.published else ""
+            ),
+            "Read": news_sentiment.level_name(j.score),
+            "Bias": j.bias,
+            "Confidence": j.confidence,
+            "Relevance": j.relevance,
+        }
+        for j in batch.judgments
+    ]
+    return signal, rows, batch.model, batch.input_tokens
+
+
+def render_news_sentiment():
+    st.subheader("News Headline Sentiment")
+    api_key = st.secrets.get("TYPESAFE_API_KEY") or os.getenv("TYPESAFE_API_KEY")
+    if not api_key:
+        st.info(
+            "Add `TYPESAFE_API_KEY` to Streamlit secrets to enable the TypeSafe news "
+            "headline signal. Get a key at https://console.typesafe.ai/."
+        )
+        return
+    model = st.secrets.get("TYPESAFE_MODEL") or os.getenv("TYPESAFE_MODEL") or None
+    try:
+        with st.spinner("Judging recent NIFTY headlines with TypeSafe..."):
+            signal, rows, model_used, input_tokens = load_news_signal(api_key, model)
+    except Exception as exc:  # network, RSS, or API failure must not break the Greeks view
+        st.warning(f"News sentiment unavailable: {exc}")
+        return
+
+    icon = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "🟡"}.get(signal.label, "⚪")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("News signal", f"{icon} {signal.label}")
+    c2.metric("Weighted bias (-1 bearish … +1 bullish)", f"{signal.bias:+.2f}")
+    c3.metric("Model confidence", f"{signal.confidence:.0%}")
+    st.caption(
+        f"{signal.relevant_count} of {signal.total_count} headlines judged relevant to the Indian "
+        f"market (relevance ≥ {news_sentiment.RELEVANCE_THRESHOLD:.0%}). Model: {model_used or 'jev-latest'}, "
+        f"{input_tokens} input tokens. Refreshes every {NEWS_CACHE_TTL_SECONDS // 60} minutes."
+    )
+    if rows:
+        news_df = pd.DataFrame(rows).sort_values("Relevance", ascending=False)
+        st.dataframe(
+            news_df.style.format({"Bias": "{:+.2f}", "Confidence": "{:.0%}", "Relevance": "{:.0%}"}),
+            width="stretch",
+            hide_index=True,
+        )
+
+
+render_news_sentiment()
+
 st.subheader("Raw Data Log")
 st.download_button(label="Download CSV",data=df.to_csv(index=False),file_name="greeks_log.csv",mime="text/csv")
 st.caption("🔄 Auto-refresh every minute.")

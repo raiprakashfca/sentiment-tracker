@@ -10,3 +10,4 @@ scipy
 toml
 nsepython
 yfinance
+typesafe-sdk
