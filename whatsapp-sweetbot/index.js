@@ -445,9 +445,23 @@ async function startWhatsApp() {
   const browser = findBrowser();
   log(`Starting WhatsApp Web${browser ? ` with ${path.basename(browser)}` : ''} — this can take a minute…`);
 
+  // When WhatsApp logs this device out, the library wipes the profile folder while its
+  // Chrome still holds it, which fails on Windows. We switch to a new folder instead.
+  class KeepFolderAuth extends LocalAuth {
+    async logout() {}
+  }
+
   const client = new Client({
-    authStrategy: new LocalAuth({ clientId: state.sessionId || undefined, dataPath: sessionRoot }),
+    authStrategy: new KeepFolderAuth({ clientId: state.sessionId || undefined, dataPath: sessionRoot }),
     puppeteer: { headless: true, executablePath: browser, args: ['--no-sandbox', '--disable-setuid-sandbox'] },
+    // Headless Chrome refuses WhatsApp Web's request for persistent storage, and WhatsApp
+    // answers a later reload by logging the device out. Grant it before the page loads.
+    evalOnNewDoc: () => {
+      if (navigator.storage) {
+        navigator.storage.persist = async () => true;
+        navigator.storage.persisted = async () => true;
+      }
+    },
   });
   currentClient = client;
   const on = (event, handler) => client.on(event, (...args) => (isCurrent() ? handler(...args) : undefined));
@@ -479,12 +493,12 @@ async function startWhatsApp() {
   on('disconnected', (reason) => {
     wa.qr = null;
     if (reason === 'LOGOUT') {
-      // The library clears the session and reopens WhatsApp Web by itself; a new QR follows.
-      // Tearing the client down here as well made the two fight and crashed the bot.
       wa.state = 'starting';
       wa.error = null;
       log('WhatsApp was unlinked from your phone — a new QR code will appear here.', 'error');
-      watchFor(generation, client, 90e3, 'The new QR code did not appear');
+      state.sessionId = newSessionId(); // fresh folder; see KeepFolderAuth
+      saveState();
+      restartWhatsApp(client, 2000);
       return;
     }
     wa.state = 'disconnected';

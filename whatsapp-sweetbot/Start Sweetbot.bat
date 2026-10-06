@@ -19,7 +19,7 @@ echo Starting Sweetbot. The control panel opens in your browser.
 echo Keep this window open - minimise it. Closing it stops the bot.
 
 :run
-node index.js %*
+node index.js %* 2>>sweetbot-console.log
 if errorlevel 1 (
   echo.
   echo Sweetbot stopped unexpectedly - starting it again in 10 seconds...
