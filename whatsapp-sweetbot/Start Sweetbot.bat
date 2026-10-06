@@ -17,7 +17,16 @@ if not exist node_modules (
 
 echo Starting Sweetbot. The control panel opens in your browser.
 echo Keep this window open - minimise it. Closing it stops the bot.
-node index.js
+
+:run
+node index.js %*
+if errorlevel 1 (
+  echo.
+  echo Sweetbot stopped unexpectedly - starting it again in 10 seconds...
+  timeout /t 10 /nobreak >nul
+  goto run
+)
+
 echo.
 echo Sweetbot has stopped.
-pause
+if "%~1"=="" pause

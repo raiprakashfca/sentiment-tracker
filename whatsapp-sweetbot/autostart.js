@@ -9,10 +9,11 @@ const supported = () => process.platform === 'win32' && !!process.env.APPDATA;
 const launcherPath = () =>
   path.join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'Sweetbot.vbs');
 
-const vbsQuote = (s) => `""${s}""`; // a quote inside a VBScript string literal is doubled
+const vbsQuote = (s) => s.replace(/"/g, '""'); // a quote inside a VBScript string literal is doubled
 
 function launcherScript() {
-  const cmd = `${vbsQuote(process.execPath)} ${vbsQuote(path.join(__dirname, 'index.js'))} --no-browser`;
+  // Through the .bat so a crash restarts the bot; --no-browser also skips its final pause.
+  const cmd = vbsQuote(`cmd /c ""${path.join(__dirname, 'Start Sweetbot.bat')}" --no-browser"`);
   return [
     "' Starts Sweetbot in the background when you log in. Delete this file to stop that.",
     'Set sh = CreateObject("WScript.Shell")',

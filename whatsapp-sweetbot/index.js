@@ -2,12 +2,13 @@ const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 const { buildMessage } = require('./messages');
-const { generateWithLLM, llmLastError } = require('./llm');
+const { generateWithLLM, llmLastError, pickAvailableModel, listModelIds } = require('./llm');
 const { startUI } = require('./ui');
 const { loadAuth } = require('./auth');
 const { killLeftoverBrowsers } = require('./browser-cleanup');
 const { newSessionId, removeOldSessions } = require('./session-folders');
 const autostart = require('./autostart');
+const { matchesRecipient, sweetbotDayKey, latestFromMeMs } = require('./her-chat');
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const NO_BROWSER = process.argv.includes('--no-browser');
@@ -100,8 +101,8 @@ const saveState = () => DRY_RUN || fs.writeFileSync(statePath, JSON.stringify(st
 
 // A "day" runs from 4am to 4am, so texting her at 1am still counts as last night.
 const DAY_STARTS_AT = 4;
-const dayKey = () =>
-  new Date(Date.now() - DAY_STARTS_AT * 3600e3).toLocaleDateString('en-CA', { timeZone: config.timezone });
+const dayKeyAt = (ms) => sweetbotDayKey(ms, config.timezone, DAY_STARTS_AT);
+const dayKey = () => dayKeyAt(Date.now());
 
 const waitForMe = () => config.startAfterMyFirstMessage !== false;
 const awakeToday = () => DRY_RUN || state.awakeOn === dayKey();
@@ -142,14 +143,19 @@ function resume() {
 
 // Someone texted in her chat (you by hand, or her): the bot backs off for a fresh
 // random gap, so it never cuts into a real conversation.
-function onChatActivity(fromMe) {
+function onChatActivity(fromMe, atMs = Date.now()) {
   if (fromMe && state.awakeOn !== dayKey()) {
     state.awakeOn = dayKey();
     saveState();
     log(`You texted ${config.recipientName} — bot starts for today.`, 'status');
   }
-  if (state.awakeOn === dayKey()) {
-    nextSendAt = Math.max(nextSendAt || 0, Date.now() + nextGapMs());
+  if (state.awakeOn !== dayKey()) return;
+  // The wait is measured from the message itself, so a text from this morning
+  // is not treated as if it had just arrived.
+  nextSendAt = Math.max(nextSendAt || 0, atMs + nextGapMs());
+  if (nextSendAt <= Date.now()) {
+    log('The usual wait after your message has already passed, so the next one goes out shortly.', 'status');
+  } else {
     log(`Chat activity — next bot message not before ${timeStr(nextSendAt)}.`);
   }
 }
@@ -167,7 +173,17 @@ function describe() {
   } else if (inQuietHours(hour)) {
     return { mode: 'bedtime', text: 'Quiet hours' };
   }
-  return { mode: 'running', text: nextSendAt ? `Next message around ${timeStr(nextSendAt)}` : 'Running' };
+  return { mode: 'running', text: nextSendAt ? `Next message around ${timeStr(nextSendAt)} (${roughlyWhen(nextSendAt)})` : 'Running' };
+}
+
+function roughlyWhen(ms) {
+  const min = Math.round((ms - Date.now()) / 60000);
+  if (min <= 1) return 'any moment now';
+  if (min < 60) return `in about ${min} minutes`;
+  const hours = Math.floor(min / 60);
+  const rest = min % 60;
+  if (!rest) return `in about ${hours} hour${hours === 1 ? '' : 's'}`;
+  return `in about ${hours}h ${rest}m`;
 }
 
 // ---- Commands (WhatsApp self-chat) ----------------------------------------------
@@ -193,6 +209,7 @@ async function writeMessage(hour) {
   const args = { hour, name: config.recipientName, neverSay: config.myStyle?.neverSay, myStyle: config.myStyle };
   const fromLLM = config.llm?.enabled && (await generateWithLLM({ llm: config.llm, ...args }));
   let error = null;
+  if (fromLLM) lastLLMError = {};
   if (config.llm?.enabled && !fromLLM) {
     error = friendlyLLMError(llmLastError());
     if (error !== lastLLMError.text || Date.now() - lastLLMError.t > 60e3) {
@@ -201,6 +218,33 @@ async function writeMessage(hour) {
     }
   }
   return { parts: fromLLM || buildMessage(args), source: fromLLM ? 'AI' : 'built-in', error };
+}
+
+// Groq and the other hosts retire model names without notice. If the saved model
+// is gone but another one we can use is listed, switch to it and remember that.
+async function adoptWorkingModel() {
+  const llm = config.llm;
+  if (!llm?.enabled || !llm.baseUrl || !llm.model) return null;
+  let ids;
+  try {
+    ids = await listModelIds(llm);
+  } catch {
+    return null; // offline or a host that has no model list: keep the saved setting
+  }
+  const next = pickAvailableModel(llm.model, ids);
+  if (next === llm.model) return null;
+  if (!next) {
+    const text = `AI writer model "${llm.model}" is not offered by that server. Choose another in Settings.`;
+    log(text, 'error');
+    return text;
+  }
+  const from = llm.model;
+  llm.model = next;
+  if (/groq\.com/.test(llm.baseUrl) && !llm.reasoningEffort) llm.reasoningEffort = 'low';
+  saveConfig({});
+  const text = `"${from}" is no longer available, so the AI writer now uses ${next}.`;
+  log(text, 'status');
+  return text;
 }
 
 function friendlyLLMError(e = '') {
@@ -345,6 +389,26 @@ async function forgetLink(client, wasLinked) {
   saveState();
 }
 
+// If this client has neither shown a QR code nor become ready within the time
+// given, start again on a fresh session folder: a stuck Chrome profile is the usual cause.
+function watchFor(generation, client, ms, what) {
+  setTimeout(() => {
+    if (generation !== waGeneration || stopping || ['qr', 'ready'].includes(wa.state)) return;
+    log(`${what} in ${Math.round(ms / 60000)} minute(s). Starting WhatsApp again…`, 'error');
+    state.sessionId = newSessionId();
+    saveState();
+    restartWhatsApp(client, 1000);
+  }, ms);
+}
+
+// A bug anywhere in the WhatsApp layer used to end the whole process with no trace.
+function recoverFrom(kind, err) {
+  log(`Sweetbot hit ${kind}: ${err?.stack?.split('\n').slice(0, 2).join(' ') || err}. Reconnecting…`, 'error');
+  if (!stopping && !DRY_RUN) restartWhatsApp(currentClient, 5000);
+}
+process.on('unhandledRejection', (err) => recoverFrom('an unexpected error', err));
+process.on('uncaughtException', (err) => recoverFrom('a crash', err));
+
 // Forgets the current WhatsApp link and starts over, so the panel shows a new QR code.
 function relinkWhatsApp() {
   if (DRY_RUN) return 'Preview mode — there is nothing to relink.';
@@ -400,42 +464,117 @@ async function startWhatsApp() {
     wa.state = 'linked';
     wa.qr = null;
     log('WhatsApp linked — finishing login…', 'status');
+    const generation = waGeneration;
+    setTimeout(() => {
+      if (generation !== waGeneration || wa.state === 'ready' || stopping) return;
+      log('WhatsApp did not finish loading. Reconnecting…', 'error');
+      restartWhatsApp(client, 3000);
+    }, 45000);
   });
   on('auth_failure', (m) => {
     wa.state = 'error';
     wa.error = `Login failed: ${m}`;
     log(wa.error, 'error');
   });
-  on('disconnected', (r) => {
+  on('disconnected', (reason) => {
+    wa.qr = null;
+    if (reason === 'LOGOUT') {
+      // The library clears the session and reopens WhatsApp Web by itself; a new QR follows.
+      // Tearing the client down here as well made the two fight and crashed the bot.
+      wa.state = 'starting';
+      wa.error = null;
+      log('WhatsApp was unlinked from your phone — a new QR code will appear here.', 'error');
+      watchFor(generation, client, 90e3, 'The new QR code did not appear');
+      return;
+    }
     wa.state = 'disconnected';
-    wa.error = r === 'LOGOUT' ? 'WhatsApp was unlinked from your phone — a new QR code will appear here.' : `WhatsApp disconnected (${r}).`;
+    wa.error = `WhatsApp disconnected (${reason}).`;
     log(wa.error, 'error');
     restartWhatsApp(client, 15e3);
   });
+  watchFor(generation, client, 180e3, 'WhatsApp Web did not open');
 
   const herIds = new Set();
   let herIdsFor = null;
+  let resolvedHerIds = false;
 
-  // WhatsApp sometimes uses other ids (e.g. @lid) for the same chat, so match by number too.
-  async function isHerChat(msg) {
+  function trackHerId(id) {
+    if (id) herIds.add(id);
+  }
+
+  // WhatsApp now addresses people with an extra id (@lid) that is not their phone
+  // number. Remember every id we can resolve, and compare the phone number itself.
+  async function rememberHerIds() {
     if (herIdsFor !== config.recipientNumber) {
       herIds.clear();
-      herIds.add(herChatId());
       herIdsFor = config.recipientNumber;
+      resolvedHerIds = false;
     }
+    trackHerId(herChatId());
+    if (resolvedHerIds) return;
+    try {
+      const [row] = await client.getContactLidAndPhone([herChatId()]);
+      trackHerId(row?.lid);
+      trackHerId(row?.pn);
+      resolvedHerIds = !!(row?.lid || row?.pn);
+    } catch {}
+  }
+
+  async function isHerChat(msg) {
+    await rememberHerIds();
     const other = msg.fromMe ? msg.to : msg.from;
+    if (!other || String(other).endsWith('@g.us')) return false;
     if (herIds.has(other)) return true;
-    if (other.endsWith('@g.us')) return false;
     try {
       const chat = await msg.getChat();
       if (chat.isGroup) return false;
       const contact = await chat.getContact();
-      if (String(contact.number) === String(config.recipientNumber) || chat.id.user === String(config.recipientNumber)) {
-        herIds.add(other);
-        return true;
+      const known = matchesRecipient(
+        [other, contact?.number, contact?.id?.user, contact?.id?._serialized, chat.id?.user, chat.id?._serialized],
+        config.recipientNumber,
+      );
+      if (!known) {
+        const [row] = await client.getContactLidAndPhone([chat.id?._serialized || other]);
+        if (!matchesRecipient([row?.pn], config.recipientNumber)) return false;
+        trackHerId(row?.lid);
+        trackHerId(row?.pn);
       }
-    } catch {}
-    return false;
+      trackHerId(other);
+      trackHerId(chat.id?._serialized);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // A good-morning text sent before the bot was watching, or one WhatsApp never
+  // announced as a new event, is still sitting in the chat. Read it from there.
+  async function catchUpOnHerChat() {
+    if (!hasNumber() || awakeToday()) return;
+    try {
+      await rememberHerIds();
+      let chat = null;
+      for (const id of herIds) {
+        try {
+          chat = await client.getChatById(id);
+          break;
+        } catch {}
+      }
+      if (!chat) {
+        log(`Couldn't open ${config.recipientName}'s chat to see if you already texted today.`, 'error');
+        return;
+      }
+      trackHerId(chat.id?._serialized);
+      const mine = await chat.fetchMessages({ limit: 20, fromMe: true });
+      const at = latestFromMeMs(mine, (ms) => dayKeyAt(ms) === dayKey());
+      if (!at) {
+        log(`Checked ${config.recipientName}'s chat: none of your messages are from today yet.`, 'status');
+        return;
+      }
+      onChatActivity(true, at);
+    } catch (err) {
+      log(`Couldn't check ${config.recipientName}'s chat for your message today: ${err.message}`, 'error');
+    }
   }
 
   on('message_create', async (msg) => {
@@ -460,15 +599,16 @@ async function startWhatsApp() {
     }
   });
 
-  on('ready', () => {
+  on('ready', async () => {
     activeClient = client;
     wa.state = 'ready';
     wa.error = null;
     log('WhatsApp is ready.', 'status');
-    if (!loopStarted) {
-      loopStarted = true;
-      loop();
-    }
+    if (!isCurrent()) return;
+    await catchUpOnHerChat();
+    if (!isCurrent() || loopStarted) return;
+    loopStarted = true;
+    loop();
   });
 
   try {
@@ -496,6 +636,7 @@ async function main() {
       port,
       config,
       saveConfig,
+      onSettingsSaved: adoptWorkingModel,
       log,
       getStatus: () => ({
         whatsapp: wa.state,
@@ -504,6 +645,11 @@ async function main() {
         bot: describe(),
         events: events.slice(-60).reverse(),
         preview: DRY_RUN,
+        ai: {
+          enabled: !!config.llm?.enabled,
+          model: config.llm?.model || '',
+          problem: config.llm?.enabled ? lastLLMError.text || '' : '',
+        },
       }),
       pause,
       resume,
@@ -543,6 +689,7 @@ async function main() {
   log(`Control panel: ${url}`);
   if (!loadAuth()) log('The control panel is locked until you set a password: double-click "Set Password" in the Sweetbot folder.', 'error');
   if (!NO_BROWSER) openInBrowser(url);
+  await adoptWorkingModel();
 
   if (DRY_RUN) {
     log('Preview mode: messages are shown here, nothing is sent.', 'status');
