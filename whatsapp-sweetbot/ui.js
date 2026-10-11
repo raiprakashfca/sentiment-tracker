@@ -8,6 +8,7 @@ const { AUTH_PATH, COOKIE_NAME, loadAuth, verifyPassword, createSessionStore, cr
 
 const PAGE = path.join(__dirname, 'public', 'index.html');
 const LOGIN_PAGE = path.join(__dirname, 'public', 'login.html');
+const CHAT_PAGE = path.join(__dirname, 'public', 'chat.html');
 const MAX_BODY_CHARS = 100_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const NO_PASSWORD_MESSAGE ='No password has been set yet. Double-click "Set Password" in the Sweetbot folder, then try again.';
@@ -171,12 +172,12 @@ function createLoginGate({ authFile, log }) {
       return send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie('', 0) });
     }
     if (loggedIn) return false;
-    if (route === 'GET /') return redirect(res, '/login');
+    if (route === 'GET /' || route === 'GET /chat') return redirect(res, '/login');
     return send(res, 401, { error: 'Log in first.' });
   };
 }
 
-function startUI({ port, config, saveConfig, getStatus, pause, resume, autostart, preview, stop, relink, authFile = AUTH_PATH, log = () => {} }) {
+function startUI({ port, config, saveConfig, getStatus, pause, resume, autostart, preview, stop, relink, sendNow, conversation = async () => ({ connected: false, messages: [] }), onSettingsSaved = async () => null, authFile = AUTH_PATH, log = () => {} }) {
   const allowedHosts = new Set([`localhost:${port}`, `127.0.0.1:${port}`]);
   const loginGate = createLoginGate({ authFile, log });
 
@@ -190,6 +191,8 @@ function startUI({ port, config, saveConfig, getStatus, pause, resume, autostart
       if (await loginGate(req, res, url)) return;
 
       if (req.method === 'GET' && url.pathname === '/') return sendPage(res, PAGE);
+      if (req.method === 'GET' && url.pathname === '/chat') return sendPage(res, CHAT_PAGE);
+      if (req.method === 'GET' && url.pathname === '/api/chat') return send(res, 200, await conversation());
       if (req.method === 'GET' && url.pathname === '/api/status') return send(res, 200, getStatus());
       if (req.method === 'GET' && url.pathname === '/api/settings') return send(res, 200, publicSettings(config));
       if (req.method === 'GET' && url.pathname === '/api/autostart') {
@@ -199,9 +202,11 @@ function startUI({ port, config, saveConfig, getStatus, pause, resume, autostart
       if (req.method === 'POST') {
         const body = await readBody(req);
         switch (url.pathname) {
-          case '/api/settings':
+          case '/api/settings': {
             saveConfig(applySettings(config, body));
-            return send(res, 200, { ok: true, settings: publicSettings(config) });
+            const notice = await onSettingsSaved();
+            return send(res, 200, { ok: true, settings: publicSettings(config), notice: notice || undefined });
+          }
           case '/api/pause':
             return send(res, 200, { ok: true, message: pause(body.minutes === 'today' ? 'today' : Number(body.minutes) || 'forever') });
           case '/api/autostart':
@@ -210,6 +215,8 @@ function startUI({ port, config, saveConfig, getStatus, pause, resume, autostart
             return send(res, 200, { ok: true, message: resume() });
           case '/api/preview':
             return send(res, 200, { ok: true, samples: await preview() });
+          case '/api/send':
+            return send(res, 200, { ok: true, message: sendNow(body.text) });
           case '/api/relink':
             return send(res, 200, { ok: true, message: relink() });
           case '/api/stop':

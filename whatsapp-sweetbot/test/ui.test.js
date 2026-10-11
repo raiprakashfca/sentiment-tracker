@@ -32,6 +32,10 @@ async function startPanel({ withPassword = true } = {}) {
       calls.relink += 1;
       return 'Relinking.';
     },
+    sendNow: (text) => {
+      calls.sent = text;
+      return 'Sending it now.';
+    },
     config: { quietHours: { start: 23, end: 8 }, timezone: 'Asia/Kolkata', llm: { apiKey: 'secret-key' } },
     saveConfig: () => {},
     getStatus: () => ({ whatsapp: 'ready', qr: null }),
@@ -75,7 +79,7 @@ test('every API route refuses requests that are not logged in', async () => {
     for (const route of ['/api/status', '/api/settings', '/api/autostart']) {
       assert.equal((await panel.get(route)).status, 401, `GET ${route}`);
     }
-    for (const route of ['/api/settings', '/api/pause', '/api/resume', '/api/preview', '/api/autostart', '/api/stop', '/api/relink']) {
+    for (const route of ['/api/settings', '/api/pause', '/api/resume', '/api/preview', '/api/autostart', '/api/stop', '/api/relink', '/api/send']) {
       assert.equal((await panel.post(route, {})).status, 401, `POST ${route}`);
     }
     assert.equal(panel.calls.stop, 0);
@@ -141,6 +145,33 @@ test('relinking WhatsApp works once logged in', async () => {
     assert.equal(res.status, 200);
     assert.equal((await res.json()).message, 'Relinking.');
     assert.equal(panel.calls.relink, 1);
+  } finally {
+    await panel.close();
+  }
+});
+
+test('the chat page and its messages need a login', async () => {
+  const panel = await startPanel();
+  try {
+    assert.equal((await panel.get('/chat')).status, 302);
+    assert.equal((await panel.get('/api/chat')).status, 401);
+    const { cookie } = await panel.login();
+    assert.equal((await panel.get('/chat', { Cookie: cookie })).status, 200);
+    const res = await panel.get('/api/chat', { Cookie: cookie });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { connected: false, messages: [] });
+  } finally {
+    await panel.close();
+  }
+});
+
+test('a logged-in user can send an exact message', async () => {
+  const panel = await startPanel();
+  try {
+    const { cookie } = await panel.login();
+    const res = await panel.post('/api/send', { text: 'hello there' }, { Cookie: cookie });
+    assert.equal(res.status, 200);
+    assert.equal(panel.calls.sent, 'hello there');
   } finally {
     await panel.close();
   }

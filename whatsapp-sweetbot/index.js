@@ -255,8 +255,9 @@ function friendlyLLMError(e = '') {
   return e.replace(/^HTTP \d+ /, '').slice(0, 140) || 'unknown error';
 }
 
-async function sendParts(parts) {
+async function sendParts(parts, source = 'bot') {
   const client = activeClient;
+  const label = source === 'yours' ? 'Sent your message' : 'Sent';
   for (const part of parts) {
     if (DRY_RUN) {
       log(`[preview] would send: ${part}`, 'sent');
@@ -269,14 +270,56 @@ async function sendParts(parts) {
     await chat.clearState();
     botSent.add(part);
     await client.sendMessage(chatId, part);
-    log(`Sent: ${part}`, 'sent');
+    log(`${label}: ${part}`, 'sent');
     await sleep(rand(2000, 7000));
   }
+}
+
+// ---- Messages you write yourself ----------------------------------------------------
+// Queued in a file so they survive a restart, and sent even while the bot is paused.
+const outboxPath = path.join(__dirname, '.outbox.json');
+const readOutbox = () => { try { return readJson(outboxPath).filter((t) => typeof t === 'string'); } catch { return []; } };
+const MAX_OWN_MESSAGE = 1000;
+
+function queueOwnMessage(text) {
+  const clean = String(text || '').trim().slice(0, MAX_OWN_MESSAGE);
+  if (!clean) throw new Error('Type the message first.');
+  if (!hasNumber()) throw new Error('Add her number in Settings first.');
+  fs.writeFileSync(outboxPath, JSON.stringify([...readOutbox(), clean]));
+  log(`Queued your message: ${clean}`, 'status');
+  return wa.state === 'ready' ? 'Sending it now.' : 'Saved — it goes out as soon as WhatsApp is connected.';
+}
+
+async function drainOutbox() {
+  if (wa.state !== 'ready' || !activeClient) return;
+  for (const text of readOutbox()) {
+    try {
+      await sendParts([text], 'yours');
+    } catch (err) {
+      log(`Could not send your message: ${err.message}`, 'error');
+      return; // keep it queued and try again on the next round
+    }
+    fs.writeFileSync(outboxPath, JSON.stringify(readOutbox().filter((t) => t !== text)));
+  }
+}
+
+// The last messages in her chat, oldest first, for the chat page.
+async function conversation(limit = 60) {
+  if (wa.state !== 'ready' || !activeClient || !hasNumber()) return { connected: false, messages: [] };
+  const chat = await activeClient.getChatById(herChatId());
+  const messages = await chat.fetchMessages({ limit });
+  return {
+    connected: true,
+    messages: messages
+      .filter((m) => m.body || m.hasMedia)
+      .map((m) => ({ id: m.id?._serialized || m.id?.$1 || String(m.timestamp), fromMe: !!m.fromMe, text: m.body || '[attachment]', t: m.timestamp * 1000, ack: m.ack })),
+  };
 }
 
 async function loop() {
   for (;;) {
     await sleep(DRY_RUN ? 300 : Number(process.env.SWEETBOT_POLL_MS) || 20000);
+    await drainOutbox();
     const d = describe();
     if (d.mode !== 'running') {
       status(d.text + '.');
@@ -683,6 +726,8 @@ async function main() {
         return out;
       },
       relink: relinkWhatsApp,
+      sendNow: queueOwnMessage,
+      conversation,
       stop: () => {
         log('Stopping — bye!');
         stopping = true;
