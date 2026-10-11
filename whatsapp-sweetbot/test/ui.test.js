@@ -25,6 +25,7 @@ async function startPanel({ withPassword = true } = {}) {
   const authFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-ui-')), '.auth.json');
   if (withPassword) savePassword(PASSWORD, authFile);
   const calls = { stop: 0, relink: 0 };
+  const config = { quietHours: { start: 23, end: 8 }, timezone: 'Asia/Kolkata', minGapMinutes: 25, maxGapMinutes: 95, llm: { apiKey: 'secret-key' } };
   const server = await startUI({
     port,
     authFile,
@@ -36,8 +37,8 @@ async function startPanel({ withPassword = true } = {}) {
       calls.sent = text;
       return 'Sending it now.';
     },
-    config: { quietHours: { start: 23, end: 8 }, timezone: 'Asia/Kolkata', llm: { apiKey: 'secret-key' } },
-    saveConfig: () => {},
+    config,
+    saveConfig: (patch) => Object.assign(config, patch),
     getStatus: () => ({ whatsapp: 'ready', qr: null }),
     pause: () => 'Paused.',
     resume: () => 'Resumed.',
@@ -160,6 +161,18 @@ test('the chat page and its messages need a login', async () => {
     const res = await panel.get('/api/chat', { Cookie: cookie });
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), { connected: false, messages: [] });
+  } finally {
+    await panel.close();
+  }
+});
+
+test('automatic messages can be switched off and the setting is reported back', async () => {
+  const panel = await startPanel();
+  try {
+    const { cookie } = await panel.login();
+    const res = await panel.post('/api/settings', { automaticMessages: false, timezone: 'Asia/Kolkata' }, { Cookie: cookie });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).settings.automaticMessages, false);
   } finally {
     await panel.close();
   }

@@ -35,7 +35,7 @@
   .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; font-weight: 600; font-size: 13px; }
   .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
   .running { color: var(--ok); background: var(--ok-soft); }
-  .paused, .waiting { color: var(--warn); background: var(--warn-soft); }
+  .paused, .waiting, .manual { color: var(--warn); background: var(--warn-soft); }
   .bedtime, .offline, .setup { color: var(--idle); background: var(--idle-soft); }
   .error { color: var(--err); background: var(--err-soft); }
   .big { font-size: 20px; font-weight: 600; margin: 4px 0 16px; }
@@ -156,6 +156,7 @@
             <option value="21">9 pm</option><option value="22">10 pm</option><option value="23">11 pm</option>
           </select>
         </label>
+        <label class="check" style="grid-column:1/-1"><input type="checkbox" name="automaticMessages"> Send messages automatically (untick to send only what I type)</label>
         <label class="check" style="grid-column:1/-1"><input type="checkbox" name="startAfterMyFirstMessage"> Wait each day until I've texted her myself</label>
       </fieldset>
 
@@ -256,7 +257,7 @@ async function refresh() {
   renderWhatsApp(s);
   const mode = s.bot.mode;
   $('#pill').className = `pill ${mode}`;
-  $('#pill').textContent = { running: 'Running', paused: 'Paused', waiting: 'Waiting for you', bedtime: 'Bedtime', offline: 'Not linked', setup: 'Needs setup' }[mode] || mode;
+  $('#pill').textContent = { running: 'Running', paused: 'Paused', manual: 'Manual only', waiting: 'Waiting for you', bedtime: 'Bedtime', offline: 'Not linked', setup: 'Needs setup' }[mode] || mode;
   $('#botText').textContent = s.bot.text;
   renderAi(s.ai);
   $('#pauseRow').hidden = mode === 'paused';
@@ -369,6 +370,7 @@ function fillSettings(s) {
   form.maxGapMinutes.value = s.maxGapMinutes;
   form.bedtime.value = String(s.bedtime);
   form.startAfterMyFirstMessage.checked = s.startAfterMyFirstMessage;
+  form.automaticMessages.checked = s.automaticMessages !== false;
   form.neverSay.value = s.neverSay.join('\n');
   form.notes.value = s.notes.join('\n');
   form.llmEnabled.checked = s.llm.enabled;
@@ -392,6 +394,7 @@ form.addEventListener('submit', async (ev) => {
     maxGapMinutes: Number(form.maxGapMinutes.value),
     bedtime: Number(form.bedtime.value),
     startAfterMyFirstMessage: form.startAfterMyFirstMessage.checked,
+    automaticMessages: form.automaticMessages.checked,
     neverSay: form.neverSay.value,
     notes: form.notes.value,
     llm: {

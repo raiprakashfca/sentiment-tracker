@@ -4,6 +4,7 @@
   "minGapMinutes": 40,
   "maxGapMinutes": 95,
   "skipChance": 0.15,
+  "automaticMessages": true,
   "startAfterMyFirstMessage": true,
   "quietHours": {
     "start": 23,

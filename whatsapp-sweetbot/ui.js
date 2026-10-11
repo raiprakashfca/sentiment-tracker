@@ -29,6 +29,7 @@ function publicSettings(config) {
     maxGapMinutes: config.maxGapMinutes,
     bedtime: config.quietHours?.start ?? 23,
     startAfterMyFirstMessage: config.startAfterMyFirstMessage !== false,
+    automaticMessages: config.automaticMessages !== false,
     neverSay: config.myStyle?.neverSay || [],
     notes: config.myStyle?.notes || [],
     llm: {
@@ -79,6 +80,7 @@ function applySettings(config, body) {
     maxGapMinutes: max,
     quietHours: { ...config.quietHours, start: Math.round(clamp(body.bedtime, 18, 23, config.quietHours.start)) },
     startAfterMyFirstMessage: body.startAfterMyFirstMessage !== false,
+    automaticMessages: body.automaticMessages !== false,
     myStyle: { notes: cleanList(body.notes ?? config.myStyle?.notes), neverSay: cleanList(body.neverSay ?? config.myStyle?.neverSay) },
     llm,
   };

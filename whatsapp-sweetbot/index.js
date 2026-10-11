@@ -161,6 +161,7 @@ function onChatActivity(fromMe, atMs = Date.now()) {
 }
 
 function describe() {
+  if (config.automaticMessages === false) return { mode: 'manual', text: 'Automatic messages are off — only what you send goes out' };
   if (isPaused()) {
     return { mode: 'paused', text: state.pausedUntil === 'forever' ? 'Paused until you resume' : `Paused until ${timeStr(state.pausedUntil)}` };
   }
