@@ -9,7 +9,7 @@
     "preview": "node index.js --dry-run",
     "test-llm": "node test-llm.js",
     "set-password": "node set-password.js",
-    "test": "node --test test/auth.test.js test/ui.test.js test/browser-cleanup.test.js test/session-folders.test.js"
+    "test": "node --test test/auth.test.js test/ui.test.js test/browser-cleanup.test.js test/session-folders.test.js test/llm.test.js test/her-chat.test.js"
   },
   "dependencies": {
     "qrcode": "^1.5.4",

@@ -95,4 +95,23 @@ async function generateOnce({ llm, hour, name, myStyle }) {
   }
 }
 
-module.exports = { generateWithLLM, llmLastError: () => lastError };
+// Tried in order when the configured model has been retired. Only names that
+// showed up on the server are used, so this never points at a model it cannot call.
+const FALLBACK_MODELS = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'llama3.1'];
+
+function pickAvailableModel(current, ids) {
+  const available = new Set(ids || []);
+  if (available.has(current)) return current;
+  return FALLBACK_MODELS.find((id) => available.has(id)) || null;
+}
+
+async function listModelIds(llm) {
+  const res = await fetch(`${String(llm.baseUrl || '').replace(/\/$/, '')}/models`, {
+    headers: { Authorization: `Bearer ${llm.apiKey || 'local'}` },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return ((await res.json()).data || []).map((m) => m.id).filter(Boolean);
+}
+
+module.exports = { generateWithLLM, llmLastError: () => lastError, pickAvailableModel, listModelIds };
